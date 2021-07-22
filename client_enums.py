@@ -240,13 +240,14 @@ class zerodha_quote_class:
             locals()['self.sell_depth_price_'+str(counter1)] = one_depth['price']
             locals()['self.sell_depth_orders_'+str(counter1)] = one_depth['orders']
             counter1+=1
-
+        
 class gtt_condition:
 #     {'exchange': 'NSE',
 #    'last_price': 203.9,
 #    'tradingsymbol': 'DATAMATICS',
 #    'trigger_values': [203]},
     def __init__(self,condition):
+        self.condition = condition
         self.exchange = condition['exchange']
         self.last_price = condition['last_price']
         self.tradingsymbol = condition['tradingsymbol']
@@ -263,6 +264,7 @@ class gtt_condition:
            
 class gtt_orders:
     def __init__(self,orders):
+        self.orders = orders
         self.exchange_1 = orders[0]['exchange']
         self.tradingsymbol_1 = orders[0]['tradingsymbol']
         self.product_1 = orders[0]['product']
@@ -284,8 +286,10 @@ class gtt_orders:
             self.price_2 = orders[1]['price']
             self.result_2 = orders[1]['result']
 
+          
 class zerodha_gtt_status_class:
     def __init__(self,gtt):
+        self.gtt = gtt
         self.broker = 'zerodha'
         self.id = gtt['id']
         self.user_id = gtt['user_id']
@@ -297,3 +301,23 @@ class zerodha_gtt_status_class:
         self.status = gtt['status']
         self.condition = gtt_condition(gtt['condition'])
         self.orders = gtt_orders(gtt['orders'])
+        
+        
+        
+        
+def flatten_json(y):
+    out = {}
+    def flatten(x, name=''):
+        if type(x) is dict:
+            for a in x:
+                flatten(x[a], name + a + '_')
+        elif type(x) is list:
+            i = 0
+            for a in x:
+                flatten(a, name + str(i) + '_')
+                i += 1
+        else:
+            out[name[:-1]] = x
+    flatten(y)
+    return out
+
