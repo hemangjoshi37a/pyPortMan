@@ -17,6 +17,8 @@ Python Zerodha Multi Account Portfolio Management Software. (Jupyter Notebook)
     
 ###Voilà.... You have sucessfully managed the portfolio in parellel in all the accounts.
 
+
+
 ## 📫 How to reach me
 [<img height="36" src="https://cdn.simpleicons.org/WhatsApp"/>](https://wa.me/917016525813) &nbsp;
 [<img height="36" src="https://cdn.simpleicons.org/telegram"/>](https://t.me/hjlabs) &nbsp;
@@ -29,6 +31,9 @@ Python Zerodha Multi Account Portfolio Management Software. (Jupyter Notebook)
 [<img height="36" src="https://cdn.simpleicons.org/Instagram"/>](https://www.instagram.com/hemangjoshi37) &nbsp;
 [<img height="36" src="https://cdn.simpleicons.org/Pinterest"/>](https://in.pinterest.com/hemangjoshi37a) &nbsp;
 [<img height="36" src="https://cdn.simpleicons.org/Blogger"/>](http://hemangjoshi.blogspot.com) &nbsp;
+[<img height="36" src="https://cdn.simpleicons.org/similarweb"/>](https://hjlabs.in/) &nbsp;
+[<img height="36" src="https://cdn.simpleicons.org/gitlab"/>](https://gitlab.com/hemangjoshi37a) &nbsp;
+ 
 
  
 ## Checkout Cool GitHub Other Repositories:
