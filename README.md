@@ -17,8 +17,6 @@ Python Zerodha Multi Account Portfolio Management Software. (Jupyter Notebook)
     
 ###Voilà.... You have sucessfully managed the portfolio in parellel in all the accounts.
 
-
-
 ## 📫 How to reach me
 [<img height="36" src="https://cdn.simpleicons.org/WhatsApp"/>](https://wa.me/917016525813) &nbsp;
 [<img height="36" src="https://cdn.simpleicons.org/telegram"/>](https://t.me/hjlabs) &nbsp;
@@ -105,3 +103,9 @@ Python Zerodha Multi Account Portfolio Management Software. (Jupyter Notebook)
 - [Cool Arduino and ESP8266 or NodeMCU Projects](https://gitlab.com/hemangjoshi37a/my_Arduino)
 - [Telegram Trade Msg Backtest ML](https://gitlab.com/hemangjoshi37a/TelegramTradeMsgBacktestML)
 
+## Awesome Fiverr. Gigs:
+- [develop machine learning ner model as in nlp using python](https://www.fiverr.com/share/9YNabx)
+- [train custom chatgpt question answering model](https://www.fiverr.com/share/rwx6r7)
+- [build algotrading, backtesting and stock monitoring tools using python](https://www.fiverr.com/share/A7Y14q)
+- [tutor you in your science problems](https://www.fiverr.com/share/zPzmlz)
+- [make apps for you crossplatform	](https://www.fiverr.com/share/BGw12l)
