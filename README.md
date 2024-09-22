@@ -1,33 +1,25 @@
 # pyPortMan 📊💼
 
+<p align="center">
+  <img src="https://user-images.githubusercontent.com/12392345/125978523-eb21fa0b-e1c0-4af9-920e-4a418e273f26.png" alt="pyPortMan Logo" width="200">
+</p>
+
 ![GitHub stars](https://img.shields.io/github/stars/hemangjoshi37a/pyPortMan?style=social)
 ![GitHub forks](https://img.shields.io/github/forks/hemangjoshi37a/pyPortMan?style=social)
 ![GitHub issues](https://img.shields.io/github/issues/hemangjoshi37a/pyPortMan)
 ![GitHub license](https://img.shields.io/github/license/hemangjoshi37a/pyPortMan)
 
-<p align="center">
-  <img src="https://user-images.githubusercontent.com/12392345/125978523-eb21fa0b-e1c0-4af9-920e-4a418e273f26.png" alt="pyPortMan Logo" width="200">
-</p>
-
 > Python Zerodha Multi-Account Portfolio Management Software (Jupyter Notebook)
 
 pyPortMan is a powerful tool designed to help you manage multiple Zerodha trading accounts effortlessly. With automated GTT (Good Till Triggered) order placement and portfolio tracking, it's perfect for traders and investors looking to streamline their workflow and optimize their trading strategies across multiple accounts.
 
-## 🌟 Why pyPortMan?
+## 🌟 Key Features
 
-- **Effortless Multi-Account Management**: Manage all your Zerodha accounts from a single interface.
-- **Time-Saving Automation**: Let pyPortMan handle GTT order placements based on your predefined strategies.
-- **Real-Time Insights**: Monitor your portfolio performance across all accounts in real-time.
-- **Flexible Allocation**: Easily set and adjust percentage-based allocations for each stock across your accounts.
-- **Stay Informed**: Receive instant alerts via Telegram to keep you updated on important trading activities.
-
-## 🚀 Features
-
-- 📈 Multi-account management
+- 📈 Multi-account management for Zerodha
 - 🤖 Automated GTT order placement
-- 📊 Real-time portfolio tracking
-- 💹 Percentage-based allocation across accounts
-- 📱 Telegram integration for alerts
+- 📊 Real-time portfolio tracking across all accounts
+- 💹 Percentage-based allocation for each stock
+- 📱 Telegram integration for instant alerts
 - 🔒 Secure handling of account credentials
 - 📉 Risk management through automated stop-loss and target orders
 
@@ -58,7 +50,7 @@ pyPortMan is a powerful tool designed to help you manage multiple Zerodha tradin
 
 2. Configure your stock list:
    - Open `stocks.xlsx`
-   - Add the stocks you want to trade, including Symbol, Percentage Allocation, Buy Price, and Sell Price
+   - Add the stocks you want to trade, including Symbol, Percentage Allocation, Buy Price, Sell Price, and Stop Loss
 
 3. Run all cells in `hjOpenTerminal.ipynb`
 
@@ -99,7 +91,7 @@ pyPortMan allows you to set stop-loss orders alongside your target sell orders. 
 
 ### Telegram Alerts
 
-To set up Telegram alerts for real-time updates:
+To set up Telegram alerts:
 1. Create a Telegram bot and obtain the API key
 2. Add your Telegram chat ID and bot API key to `config.py`
 3. Customize alert preferences in the configuration file
@@ -122,8 +114,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [Zerodha Kite API](https://kite.trade/) for providing the trading interface
 - [Jugaad Trader](https://github.com/jugaad-py/jugaad-trader) for inspiration and some code foundations
-- 
-## 📫 How to reach me
+
+## 📫 How to reach me | Contact Information
 <div align="center">
   <a href="https://hjlabs.in/"><img height="36" src="https://cdn.simpleicons.org/similarweb"/></a>
   <a href="https://wa.me/917016525813"><img height="36" src="https://cdn.simpleicons.org/WhatsApp"/></a>
@@ -140,11 +132,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
   <a href="https://gitlab.com/hemangjoshi37a"><img height="36" src="https://cdn.simpleicons.org/gitlab"/></a>
 </div>
 
-
 ## 💖 Support the Project
 
 If you find pyPortMan helpful for your trading activities, consider supporting the project:
 
-[![PayPal](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=5JXC8VRCSUZWJ)
+[![PayPal](https://img.shields.io/badge/Donate-PayPal-blue.svg)](https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=5JXC8VRCSUZWJ)
 
 Your support helps us maintain and improve pyPortMan, ensuring it remains a valuable tool for the trading community!
