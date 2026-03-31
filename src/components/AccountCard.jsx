@@ -1,6 +1,6 @@
-import { formatIndianCurrency } from '../data/mockData';
+import { formatIndianCurrency } from '../services/api';
 
-export default function AccountCard({ account, onClick, onEdit }) {
+export default function AccountCard({ account, onClick, onEdit, onDelete, onRefreshToken }) {
   return (
     <div className="account-card" onClick={() => onClick && onClick(account)}>
       <div className="account-header">
@@ -19,6 +19,30 @@ export default function AccountCard({ account, onClick, onEdit }) {
           >
             ✏️
           </button>
+          {onRefreshToken && (
+            <button
+              className="btn-icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onRefreshToken && onRefreshToken(account);
+              }}
+              title="Refresh token"
+            >
+              🔄
+            </button>
+          )}
+          {onDelete && (
+            <button
+              className="btn-icon"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete && onDelete(account);
+              }}
+              title="Delete account"
+            >
+              🗑️
+            </button>
+          )}
         </div>
       </div>
 
