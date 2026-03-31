@@ -1,6 +1,6 @@
-import { formatIndianCurrency, formatNumber } from '../data/mockData';
+import { formatIndianCurrency, formatNumber } from '../services/api';
 
-export default function PositionsTable({ positions, onSquareOff }) {
+export default function PositionsTable({ positions, onSquareOff, squaringOff }) {
   const getProductBadgeClass = (product) => {
     switch (product.toUpperCase()) {
       case 'MIS':
@@ -14,25 +14,8 @@ export default function PositionsTable({ positions, onSquareOff }) {
     }
   };
 
-  const handleSquareOffAll = () => {
-    if (window.confirm('Are you sure you want to square off all positions?')) {
-      // In a real app, this would call the API
-      console.log('Squaring off all positions');
-    }
-  };
-
   return (
     <div>
-      <div className="table-controls">
-        <button
-          className="btn-danger"
-          onClick={handleSquareOffAll}
-          disabled={!positions || positions.length === 0}
-        >
-          Square Off All
-        </button>
-      </div>
-
       <div className="table-container">
         <table className="data-table">
           <thead>
@@ -51,7 +34,7 @@ export default function PositionsTable({ positions, onSquareOff }) {
           <tbody>
             {positions.map((position) => (
               <tr key={position.id}>
-                <td>{position.accountId}</td>
+                <td>{position.accountName}</td>
                 <td>{position.symbol}</td>
                 <td>
                   <span className={`badge ${getProductBadgeClass(position.product)}`}>
@@ -71,8 +54,9 @@ export default function PositionsTable({ positions, onSquareOff }) {
                   <button
                     className="btn-square-off"
                     onClick={() => onSquareOff && onSquareOff(position)}
+                    disabled={squaringOff === position.id}
                   >
-                    Square Off
+                    {squaringOff === position.id ? 'Squaring Off...' : 'Square Off'}
                   </button>
                 </td>
               </tr>

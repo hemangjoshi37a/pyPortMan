@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { formatIndianCurrency, formatNumber } from '../data/mockData';
+import { formatIndianCurrency, formatNumber } from '../services/api';
 
 export default function HoldingsTable({ holdings, onRowClick }) {
   const [sortColumn, setSortColumn] = useState('symbol');

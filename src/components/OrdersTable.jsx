@@ -1,6 +1,6 @@
-import { formatIndianCurrency, formatNumber } from '../data/mockData';
+import { formatIndianCurrency, formatNumber } from '../services/api';
 
-export default function OrdersTable({ orders, showFilters = true }) {
+export default function OrdersTable({ orders, showFilters = true, onCancel, cancelling }) {
   const getStatusBadgeClass = (status) => {
     switch (status.toLowerCase()) {
       case 'complete':
@@ -9,6 +9,10 @@ export default function OrdersTable({ orders, showFilters = true }) {
         return 'status-pending';
       case 'open':
         return 'status-open';
+      case 'rejected':
+        return 'status-rejected';
+      case 'cancelled':
+        return 'status-cancelled';
       default:
         return 'status-default';
     }
@@ -25,6 +29,10 @@ export default function OrdersTable({ orders, showFilters = true }) {
     }
   };
 
+  const canCancel = (status) => {
+    return ['open', 'pending'].includes(status.toLowerCase());
+  };
+
   return (
     <div className="table-container">
       <table className="data-table">
@@ -39,6 +47,7 @@ export default function OrdersTable({ orders, showFilters = true }) {
             <th>Price</th>
             <th>Status</th>
             <th>Time</th>
+            {onCancel && <th>Action</th>}
           </tr>
         </thead>
         <tbody>
@@ -53,7 +62,7 @@ export default function OrdersTable({ orders, showFilters = true }) {
             return (
               <tr key={order.id}>
                 <td>{order.id}</td>
-                <td>{order.accountId}</td>
+                <td>{order.accountName}</td>
                 <td>{order.symbol}</td>
                 <td>{order.type}</td>
                 <td>
@@ -69,6 +78,19 @@ export default function OrdersTable({ orders, showFilters = true }) {
                   </span>
                 </td>
                 <td>{timeStr}</td>
+                {onCancel && (
+                  <td>
+                    {canCancel(order.status) && (
+                      <button
+                        className="btn-cancel"
+                        onClick={() => onCancel && onCancel(order.id)}
+                        disabled={cancelling === order.id}
+                      >
+                        {cancelling === order.id ? 'Cancelling...' : 'Cancel'}
+                      </button>
+                    )}
+                  </td>
+                )}
               </tr>
             );
           })}
