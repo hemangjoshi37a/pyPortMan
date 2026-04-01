@@ -419,6 +419,192 @@ export async function handleAuthCallback(data) {
   }
 }
 
+// ==================== GTT ORDERS ====================
+
+/**
+ * Get all GTT orders from all accounts
+ * @returns {Promise<Array>} - List of GTT orders
+ */
+export async function getGTTOrders() {
+  try {
+    return await apiRequest('/gtt');
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    return [];
+  }
+}
+
+/**
+ * Get GTT orders for a specific account
+ * @param {number} accountId - Account ID
+ * @returns {Promise<Array>} - List of GTT orders
+ */
+export async function getGTTOrdersByAccount(accountId) {
+  try {
+    return await apiRequest(`/gtt/${accountId}`);
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    return [];
+  }
+}
+
+/**
+ * Get GTT summary
+ * @returns {Promise<Object>} - GTT summary
+ */
+export async function getGTTSummary() {
+  try {
+    return await apiRequest('/gtt/summary');
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    return {
+      total_orders: 0,
+      active_orders: 0,
+      triggered_orders: 0,
+      cancelled_orders: 0,
+      expired_orders: 0,
+      accounts_covered: 0,
+      estimated_capital: 0,
+    };
+  }
+}
+
+/**
+ * Place a single GTT order
+ * @param {number} accountId - Account ID
+ * @param {Object} params - GTT parameters
+ * @returns {Promise<Object>} - Result
+ */
+export async function placeGTT(accountId, params) {
+  try {
+    return await apiRequest(`/gtt?account_id=${accountId}`, {
+      method: 'POST',
+      body: JSON.stringify(params),
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Place GTT for all accounts
+ * @param {Array} stockList - List of stocks
+ * @returns {Promise<Object>} - Result
+ */
+export async function placeGTTAllAccounts(stockList) {
+  try {
+    return await apiRequest('/gtt/bulk-all-accounts', {
+      method: 'POST',
+      body: JSON.stringify({ stock_list: stockList }),
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Place bulk GTT orders for one account
+ * @param {number} accountId - Account ID
+ * @param {Array} stockList - List of stocks
+ * @returns {Promise<Object>} - Result
+ */
+export async function placeBulkGTT(accountId, stockList) {
+  try {
+    return await apiRequest(`/gtt/bulk?account_id=${accountId}`, {
+      method: 'POST',
+      body: JSON.stringify({ stock_list: stockList }),
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Modify a GTT order
+ * @param {string} gttId - GTT ID
+ * @param {number} accountId - Account ID
+ * @param {Object} params - Update parameters
+ * @returns {Promise<Object>} - Result
+ */
+export async function modifyGTT(gttId, accountId, params) {
+  try {
+    return await apiRequest(`/gtt/${gttId}?account_id=${accountId}`, {
+      method: 'PUT',
+      body: JSON.stringify(params),
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Delete a GTT order
+ * @param {string} gttId - GTT ID
+ * @param {number} accountId - Account ID
+ * @returns {Promise<Object>} - { message }
+ */
+export async function deleteGTT(gttId, accountId) {
+  try {
+    return await apiRequest(`/gtt/${gttId}?account_id=${accountId}`, {
+      method: 'DELETE',
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Sync GTT status from Zerodha
+ * @param {number} accountId - Account ID (optional)
+ * @returns {Promise<Object>} - Result
+ */
+export async function syncGTTStatus(accountId = null) {
+  try {
+    const url = accountId ? `/gtt/sync?account_id=${accountId}` : '/gtt/sync';
+    return await apiRequest(url, {
+      method: 'POST',
+    });
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
+/**
+ * Import GTT from Excel file
+ * @param {File} file - Excel file
+ * @param {number} accountId - Account ID (optional)
+ * @param {boolean} allAccounts - Place for all accounts
+ * @returns {Promise<Object>} - Result
+ */
+export async function importGTTFromExcel(file, accountId = null, allAccounts = false) {
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    let url = '/gtt/import-excel';
+    const params = new URLSearchParams();
+    if (accountId) params.append('account_id', accountId);
+    if (allAccounts) params.append('all_accounts', 'true');
+    if (params.toString()) url += `?${params.toString()}`;
+
+    const response = await fetch(`${API_BASE_URL}${url}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    return await handleResponse(response);
+  } catch (error) {
+    if (error.message === 'TOKEN_EXPIRED') throw error;
+    throw error;
+  }
+}
+
 // ==================== HEALTH ====================
 
 /**

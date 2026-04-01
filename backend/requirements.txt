@@ -22,6 +22,9 @@ httpx==0.26.0
 # Data Processing
 pandas==2.2.0
 
+# Excel Processing
+openpyxl==3.1.2
+
 # Pydantic for validation
 pydantic==2.5.3
 pydantic-settings==2.1.0

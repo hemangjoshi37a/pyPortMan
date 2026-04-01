@@ -19,14 +19,15 @@ You'll need to re-login each day to get a new token.
 import os
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, Depends, HTTPException, status, Query
+from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from database import get_db, init_db
-from models import Account, Holding, Order, Position, PortfolioSnapshot
+from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder
 from kite_manager import KiteManager
+from gtt_manager import GTTManager
 from scheduler import get_scheduler
 
 # Load environment variables
@@ -167,6 +168,58 @@ class StockPnL(BaseModel):
     pnl: float
     pnl_percent: float
     current_value: float
+
+# ==================== GTT MODELS ====================
+
+class GTTOrderCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    qty: int = Field(..., description="Quantity")
+    buy_price: float = Field(..., description="Trigger price for buying")
+    target_price: float = Field(..., description="Target price for selling")
+    sl_price: float = Field(..., description="Stop loss price")
+    allocation_pct: float = Field(default=0, description="% of account funds to allocate")
+
+class GTTOrderUpdate(BaseModel):
+    target_price: Optional[float] = None
+    sl_price: Optional[float] = None
+    qty: Optional[int] = None
+    buy_price: Optional[float] = None
+    allocation_pct: Optional[float] = None
+
+class GTTOrderResponse(BaseModel):
+    id: int
+    account_id: int
+    gtt_id: str
+    stock: str
+    exchange: str
+    qty: int
+    buy_price: float
+    target_price: float
+    sl_price: float
+    allocation_pct: float
+    status: str
+    trigger_type: str
+    triggered_at: Optional[datetime]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class GTTBulkRequest(BaseModel):
+    stock_list: List[GTTOrderCreate]
+
+class GTTAllAccountsRequest(BaseModel):
+    stock_list: List[GTTOrderCreate]
+
+class GTTSummary(BaseModel):
+    total_orders: int
+    active_orders: int
+    triggered_orders: int
+    cancelled_orders: int
+    expired_orders: int
+    accounts_covered: int
+    estimated_capital: float
 
 # Startup event
 @app.on_event("startup")
@@ -388,6 +441,175 @@ def cancel_order(order_id: str, account_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== GTT ORDERS ====================
+
+@app.get("/gtt", response_model=List[GTTOrderResponse])
+def get_all_gtt_orders(db: Session = Depends(get_db)):
+    """Get all GTT orders from all accounts"""
+    return db.query(GTTOrder).order_by(GTTOrder.created_at.desc()).all()
+
+@app.get("/gtt/{account_id}", response_model=List[GTTOrderResponse])
+def get_gtt_orders(account_id: int, db: Session = Depends(get_db)):
+    """Get GTT orders for a specific account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    return db.query(GTTOrder).filter(GTTOrder.account_id == account_id).order_by(GTTOrder.created_at.desc()).all()
+
+@app.get("/gtt/summary", response_model=GTTSummary)
+def get_gtt_summary(db: Session = Depends(get_db)):
+    """Get summary of all GTT orders"""
+    gtt_manager = GTTManager(db, KiteManager(db))
+    return gtt_manager.get_gtt_summary()
+
+@app.post("/gtt")
+def place_gtt_order(account_id: int, gtt: GTTOrderCreate, db: Session = Depends(get_db)):
+    """Place a single GTT order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        result = gtt_manager.place_gtt(account_id, gtt.model_dump())
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/gtt/{gtt_id}")
+def modify_gtt_order(gtt_id: str, gtt_update: GTTOrderUpdate, account_id: int, db: Session = Depends(get_db)):
+    """Modify an existing GTT order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        result = gtt_manager.modify_gtt(account_id, gtt_id, gtt_update.model_dump(exclude_none=True))
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/gtt/{gtt_id}")
+def delete_gtt_order(gtt_id: str, account_id: int, db: Session = Depends(get_db)):
+    """Delete a GTT order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        gtt_manager.delete_gtt(account_id, gtt_id)
+        return {"message": "GTT order deleted successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/gtt/bulk")
+def place_bulk_gtt(account_id: int, request: GTTBulkRequest, db: Session = Depends(get_db)):
+    """Place GTT orders for multiple stocks (one account)"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        results = gtt_manager.place_bulk_gtt(account_id, [s.model_dump() for s in request.stock_list])
+        return {"results": results}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/gtt/bulk-all-accounts")
+def place_gtt_all_accounts(request: GTTAllAccountsRequest, db: Session = Depends(get_db)):
+    """Place same GTT orders across ALL accounts"""
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        results = gtt_manager.place_gtt_all_accounts([s.model_dump() for s in request.stock_list])
+        return results
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/gtt/sync")
+def sync_gtt_status(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Sync GTT status from Zerodha to our database"""
+    if account_id:
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+    try:
+        result = gtt_manager.sync_gtt_status(account_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/gtt/import-excel")
+async def import_gtt_from_excel(
+    account_id: Optional[int] = None,
+    all_accounts: bool = False,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db)
+):
+    """Upload stocks.xlsx and place GTT orders"""
+    import openpyxl
+    from io import BytesIO
+
+    # Read Excel file
+    contents = await file.read()
+    workbook = openpyxl.load_workbook(BytesIO(contents))
+    sheet = workbook.active
+
+    # Parse Excel rows (skip header)
+    stock_list = []
+    for row in sheet.iter_rows(min_row=2, values_only=True):
+        if not row[0]:  # Skip empty rows
+            continue
+
+        # Expected columns: Symbol | Allocation% | Buy Price | Target Price | Stop Loss | Exchange | Qty
+        stock_list.append({
+            "stock": str(row[0]).strip(),
+            "allocation_pct": float(row[1]) if row[1] else 0,
+            "buy_price": float(row[2]) if row[2] else 0,
+            "target_price": float(row[3]) if row[3] else 0,
+            "sl_price": float(row[4]) if row[4] else 0,
+            "exchange": str(row[5]).strip() if row[5] else "NSE",
+            "qty": int(row[6]) if row[6] else 0
+        })
+
+    if not stock_list:
+        raise HTTPException(status_code=400, detail="No valid data found in Excel file")
+
+    gtt_manager = GTTManager(db, KiteManager(db))
+
+    if all_accounts:
+        # Place GTT for all accounts
+        results = gtt_manager.place_gtt_all_accounts(stock_list)
+        return {"message": f"Imported {len(stock_list)} stocks for all accounts", "results": results}
+    elif account_id:
+        # Place GTT for specific account
+        account = db.query(Account).filter(Account.id == account_id).first()
+        if not account:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        results = gtt_manager.place_bulk_gtt(account_id, stock_list)
+        return {"message": f"Imported {len(stock_list)} stocks for account {account.name}", "results": results}
+    else:
+        # Return preview without placing
+        return {"message": "Preview mode", "stock_list": stock_list, "count": len(stock_list)}
 
 # ==================== STATS ====================
 

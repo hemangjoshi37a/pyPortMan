@@ -6,6 +6,7 @@ import Accounts from './pages/Accounts';
 import Holdings from './pages/Holdings';
 import Orders from './pages/Orders';
 import Positions from './pages/Positions';
+import GTTOrders from './pages/GTTOrders';
 import Settings from './pages/Settings';
 import './App.css';
 
@@ -24,6 +25,7 @@ function App() {
               <Route path="/accounts" element={<Accounts />} />
               <Route path="/holdings" element={<Holdings />} />
               <Route path="/orders" element={<Orders />} />
+              <Route path="/gtt" element={<GTTOrders />} />
               <Route path="/positions" element={<Positions />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
