@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 
 from database import SessionLocal
 from kite_manager import KiteManager
+from gtt_manager import GTTManager
+from telegram_alerts import TelegramAlerts
 
 # Configure logging
 logging.basicConfig(
@@ -113,6 +115,152 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"Error saving all snapshots: {e}")
 
+    def check_big_losses(self):
+        """Check for big losses in all holdings and send alerts"""
+        if not self.is_market_hours():
+            logger.info("Skipping big loss check - outside market hours")
+            return
+
+        try:
+            db = SessionLocal()
+            telegram = TelegramAlerts(db)
+            losses = telegram.check_big_losses()
+            if losses:
+                logger.info(f"Found {len(losses)} stocks with big losses")
+            db.close()
+        except Exception as e:
+            logger.error(f"Error checking big losses: {e}")
+
+    def sync_gtt_and_alert(self):
+        """Sync GTT status and send triggered alerts"""
+        if not self.is_market_hours():
+            logger.info("Skipping GTT sync - outside market hours")
+            return
+
+        try:
+            db = SessionLocal()
+            gtt_manager = GTTManager(db, KiteManager(db))
+            telegram = TelegramAlerts(db)
+
+            # Get all GTT orders before sync
+            from models import GTTOrder
+            before_sync = {g.gtt_id: g.status for g in db.query(GTTOrder).all()}
+
+            # Sync GTT status
+            result = gtt_manager.sync_gtt_status()
+
+            # Check for newly triggered GTTs
+            after_sync = {g.gtt_id: g.status for g in db.query(GTTOrder).all()}
+
+            for gtt_id, new_status in after_sync.items():
+                old_status = before_sync.get(gtt_id)
+                if old_status != "TRIGGERED" and new_status == "TRIGGERED":
+                    # GTT was just triggered
+                    gtt = db.query(GTTOrder).filter(GTTOrder.gtt_id == gtt_id).first()
+                    if gtt:
+                        from models import Account
+                        account = db.query(Account).filter(Account.id == gtt.account_id).first()
+                        if account:
+                            # Determine trigger type (target or SL)
+                            trigger_type = "TARGET HIT" if gtt.ltp >= gtt.target_price else "SL HIT"
+                            pnl = (gtt.ltp - gtt.buy_price) * gtt.qty
+
+                            telegram.send_gtt_triggered_alert(
+                                account_id=gtt.account_id,
+                                account_name=account.name,
+                                stock=gtt.stock,
+                                trigger_type=trigger_type,
+                                price=gtt.ltp,
+                                pnl=pnl
+                            )
+                            logger.info(f"Sent GTT triggered alert for {gtt.stock}")
+
+            db.close()
+        except Exception as e:
+            logger.error(f"Error syncing GTT and sending alerts: {e}")
+
+    def send_morning_summary(self):
+        """Send morning summary at 9:10 AM IST"""
+        try:
+            db = SessionLocal()
+            telegram = TelegramAlerts(db)
+
+            # Get all accounts data
+            from models import Account, Holding
+            accounts = db.query(Account).filter(Account.is_active == True).all()
+
+            accounts_data = []
+            for account in accounts:
+                holdings = db.query(Holding).filter(Holding.account_id == account.id).all()
+                total_value = sum(h.current_value for h in holdings)
+                overall_pnl = sum(h.pnl for h in holdings)
+                holdings_count = len(holdings)
+
+                accounts_data.append({
+                    "total_value": total_value,
+                    "overall_pnl": overall_pnl,
+                    "holdings_count": holdings_count
+                })
+
+            if accounts_data:
+                telegram.send_morning_summary(accounts_data)
+                logger.info("Morning summary sent")
+
+            db.close()
+        except Exception as e:
+            logger.error(f"Error sending morning summary: {e}")
+
+    def send_daily_summary(self):
+        """Send daily summary at 3:35 PM IST"""
+        try:
+            db = SessionLocal()
+            telegram = TelegramAlerts(db)
+
+            # Get all accounts data
+            from models import Account, Holding, GTTOrder
+            accounts = db.query(Account).filter(Account.is_active == True).all()
+
+            accounts_data = []
+            for account in accounts:
+                holdings = db.query(Holding).filter(Holding.account_id == account.id).all()
+                total_value = sum(h.current_value for h in holdings)
+                investment_value = sum(h.qty * h.avg_price for h in holdings)
+                day_pnl = sum(h.pnl for h in holdings)
+                overall_pnl = sum(h.pnl for h in holdings)
+
+                # Get active GTT count
+                active_gtt = db.query(GTTOrder).filter(
+                    GTTOrder.account_id == account.id,
+                    GTTOrder.status == "ACTIVE"
+                ).count()
+
+                # Get stock details
+                stocks = [
+                    {
+                        "stock": h.stock,
+                        "pnl": h.pnl,
+                        "pnl_percent": h.pnl_percent
+                    }
+                    for h in holdings
+                ]
+
+                accounts_data.append({
+                    "total_value": total_value,
+                    "investment_value": investment_value,
+                    "day_pnl": day_pnl,
+                    "overall_pnl": overall_pnl,
+                    "active_gtt": active_gtt,
+                    "stocks": stocks
+                })
+
+            if accounts_data:
+                telegram.send_daily_summary(accounts_data)
+                logger.info("Daily summary sent")
+
+            db.close()
+        except Exception as e:
+            logger.error(f"Error sending daily summary: {e}")
+
     def start(self):
         """Start the scheduler"""
         if self.is_running:
@@ -134,6 +282,42 @@ class MarketScheduler:
             trigger=IntervalTrigger(minutes=15),
             id='save_all_snapshots',
             name='Save portfolio snapshots',
+            replace_existing=True
+        )
+
+        # Check for big losses every 15 minutes during market hours
+        self.scheduler.add_job(
+            self.check_big_losses,
+            trigger=IntervalTrigger(minutes=15),
+            id='check_big_losses',
+            name='Check for big losses',
+            replace_existing=True
+        )
+
+        # Sync GTT status and send triggered alerts every 5 minutes during market hours
+        self.scheduler.add_job(
+            self.sync_gtt_and_alert,
+            trigger=IntervalTrigger(minutes=5),
+            id='sync_gtt_and_alert',
+            name='Sync GTT and send alerts',
+            replace_existing=True
+        )
+
+        # Send morning summary at 9:10 AM IST daily
+        self.scheduler.add_job(
+            self.send_morning_summary,
+            trigger=CronTrigger(hour=9, minute=10),
+            id='morning_summary',
+            name='Send morning summary',
+            replace_existing=True
+        )
+
+        # Send daily summary at 3:35 PM IST daily
+        self.scheduler.add_job(
+            self.send_daily_summary,
+            trigger=CronTrigger(hour=15, minute=35),
+            id='daily_summary',
+            name='Send daily summary',
             replace_existing=True
         )
 

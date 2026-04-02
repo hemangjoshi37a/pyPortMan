@@ -31,6 +31,7 @@ class Account(Base):
     orders = relationship("Order", back_populates="account", cascade="all, delete-orphan")
     positions = relationship("Position", back_populates="account", cascade="all, delete-orphan")
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="account", cascade="all, delete-orphan")
+    gtt_orders = relationship("GTTOrder", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Account(id={self.id}, name='{self.name}', account_id='{self.account_id}')>"
@@ -139,3 +140,63 @@ class PortfolioSnapshot(Base):
 
     def __repr__(self):
         return f"<PortfolioSnapshot(account_id={self.account_id}, total_value={self.total_value}, recorded_at={self.recorded_at})>"
+
+
+class GTTOrder(Base):
+    """Good Till Triggered (GTT) orders from Zerodha"""
+    __tablename__ = "gtt_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    gtt_id = Column(String(50), unique=True, nullable=False, index=True)  # Zerodha GTT ID
+    stock = Column(String(50), nullable=False, index=True)
+    exchange = Column(String(20), default="NSE")
+    qty = Column(Integer, nullable=False)
+    buy_price = Column(Float, nullable=False)  # Trigger price for buying
+    target_price = Column(Float, nullable=False)  # Sell target
+    sl_price = Column(Float, nullable=False)  # Stop loss
+    allocation_pct = Column(Float, default=0)  # % of account funds to allocate
+    status = Column(String(20), default="ACTIVE")  # ACTIVE, TRIGGERED, CANCELLED, EXPIRED
+    trigger_type = Column(String(20), default="TWO_LEG")  # TWO_LEG, SINGLE
+    triggered_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    account = relationship("Account")
+
+    def __repr__(self):
+        return f"<GTTOrder(gtt_id='{self.gtt_id}', stock='{self.stock}', status='{self.status}')>"
+
+
+class AlertConfig(Base):
+    """Telegram alert configuration"""
+    __tablename__ = "alert_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bot_token = Column(String(255), nullable=True)  # Telegram bot token
+    chat_id = Column(String(100), nullable=True)  # Telegram chat ID
+    gtt_alerts_enabled = Column(Boolean, default=True)  # GTT triggered alerts
+    loss_alerts_enabled = Column(Boolean, default=True)  # Big loss alerts
+    daily_summary_enabled = Column(Boolean, default=True)  # Daily summary alerts
+    order_alerts_enabled = Column(Boolean, default=True)  # Order alerts
+    loss_threshold_pct = Column(Float, default=5.0)  # Loss threshold percentage
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<AlertConfig(id={self.id}, chat_id='{self.chat_id}')>"
+
+
+class AlertHistory(Base):
+    """History of sent alerts"""
+    __tablename__ = "alert_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_type = Column(String(50), nullable=False, index=True)  # GTT_TRIGGERED, BIG_LOSS, etc.
+    message = Column(Text, nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow, index=True)
+    success = Column(Boolean, default=False)
+
+    def __repr__(self):
+        return f"<AlertHistory(id={self.id}, alert_type='{self.alert_type}', success={self.success})>"

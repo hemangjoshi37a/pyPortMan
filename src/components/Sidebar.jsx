@@ -5,6 +5,7 @@ const navItems = [
   { path: '/accounts', icon: '👤', label: 'Accounts', key: 'accounts' },
   { path: '/holdings', icon: '📈', label: 'Holdings', key: 'holdings' },
   { path: '/orders', icon: '📋', label: 'Orders', key: 'orders' },
+  { path: '/gtt', icon: '⚡', label: 'GTT Orders', key: 'gtt' },
   { path: '/positions', icon: '🎯', label: 'Positions', key: 'positions' },
   { path: '/settings', icon: '⚙️', label: 'Settings', key: 'settings' }
 ];
