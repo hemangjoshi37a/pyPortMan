@@ -17,6 +17,7 @@ You'll need to re-login each day to get a new token.
 """
 
 import os
+import logging
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, Depends, HTTPException, status, Query, UploadFile, File
@@ -24,11 +25,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('app.log'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 from database import get_db, init_db
-from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder
+from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder, AlertConfig, AlertHistory
 from kite_manager import KiteManager
 from gtt_manager import GTTManager
 from scheduler import get_scheduler
+from telegram_alerts import TelegramAlerts
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -220,6 +233,46 @@ class GTTSummary(BaseModel):
     expired_orders: int
     accounts_covered: int
     estimated_capital: float
+
+# ==================== ALERT MODELS ====================
+
+class AlertConfigCreate(BaseModel):
+    bot_token: str = Field(..., description="Telegram bot token")
+    chat_id: str = Field(..., description="Telegram chat ID")
+
+class AlertConfigUpdate(BaseModel):
+    bot_token: Optional[str] = None
+    chat_id: Optional[str] = None
+    gtt_alerts_enabled: Optional[bool] = None
+    loss_alerts_enabled: Optional[bool] = None
+    daily_summary_enabled: Optional[bool] = None
+    order_alerts_enabled: Optional[bool] = None
+    loss_threshold_pct: Optional[float] = None
+
+class AlertConfigResponse(BaseModel):
+    id: int
+    chat_id: Optional[str]
+    bot_token_masked: Optional[str]
+    gtt_alerts_enabled: bool
+    loss_alerts_enabled: bool
+    daily_summary_enabled: bool
+    order_alerts_enabled: bool
+    loss_threshold_pct: float
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AlertHistoryResponse(BaseModel):
+    id: int
+    alert_type: str
+    message: str
+    sent_at: datetime
+    success: bool
+
+    class Config:
+        from_attributes = True
 
 # Startup event
 @app.on_event("startup")
@@ -420,6 +473,22 @@ def place_order(account_id: int, order: OrderPlaceRequest, db: Session = Depends
     kite_manager = KiteManager(db)
     try:
         result = kite_manager.place_order(account_id, order.model_dump())
+
+        # Send Telegram alert for order placed
+        try:
+            telegram = TelegramAlerts(db)
+            telegram.send_order_placed_alert(
+                account_id=account_id,
+                account_name=account.name,
+                stock=order.tradingsymbol,
+                qty=order.quantity,
+                price=order.price or 0,
+                order_type=order.order_type,
+                transaction_type=order.transaction_type
+            )
+        except Exception as e:
+            logger.error(f"Error sending order alert: {e}")
+
         return result
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -436,6 +505,22 @@ def cancel_order(order_id: str, account_id: int, db: Session = Depends(get_db)):
     kite_manager = KiteManager(db)
     try:
         kite_manager.cancel_order(account_id, order_id)
+
+        # Send Telegram alert for order cancelled
+        try:
+            telegram = TelegramAlerts(db)
+            # Get order details
+            order_record = db.query(Order).filter(Order.order_id == order_id).first()
+            if order_record:
+                telegram.send_order_cancelled_alert(
+                    account_id=account_id,
+                    account_name=account.name,
+                    stock=order_record.stock,
+                    order_id=order_id
+                )
+        except Exception as e:
+            logger.error(f"Error sending order cancel alert: {e}")
+
         return {"message": "Order cancelled successfully"}
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
@@ -763,6 +848,155 @@ def handle_auth_callback(callback: AuthCallbackRequest, db: Session = Depends(ge
         raise HTTPException(status_code=500, detail="Failed to generate access token")
 
     return {"message": "Access token generated successfully"}
+
+# ==================== ALERTS ====================
+
+@app.get("/alerts/config", response_model=AlertConfigResponse)
+def get_alert_config(db: Session = Depends(get_db)):
+    """Get Telegram alert configuration"""
+    config = db.query(AlertConfig).first()
+    if not config:
+        # Return default config
+        return AlertConfigResponse(
+            id=0,
+            chat_id=None,
+            bot_token_masked=None,
+            gtt_alerts_enabled=True,
+            loss_alerts_enabled=True,
+            daily_summary_enabled=True,
+            order_alerts_enabled=True,
+            loss_threshold_pct=5.0,
+            created_at=datetime.utcnow(),
+            updated_at=datetime.utcnow()
+        )
+
+    # Mask bot token for security
+    masked_token = None
+    if config.bot_token:
+        masked_token = config.bot_token[:8] + "..." + config.bot_token[-4:] if len(config.bot_token) > 12 else "***"
+
+    return AlertConfigResponse(
+        id=config.id,
+        chat_id=config.chat_id,
+        bot_token_masked=masked_token,
+        gtt_alerts_enabled=config.gtt_alerts_enabled,
+        loss_alerts_enabled=config.loss_alerts_enabled,
+        daily_summary_enabled=config.daily_summary_enabled,
+        order_alerts_enabled=config.order_alerts_enabled,
+        loss_threshold_pct=config.loss_threshold_pct,
+        created_at=config.created_at,
+        updated_at=config.updated_at
+    )
+
+@app.post("/alerts/config", response_model=AlertConfigResponse)
+def save_alert_config(config_data: AlertConfigCreate, db: Session = Depends(get_db)):
+    """Save Telegram alert configuration"""
+    config = db.query(AlertConfig).first()
+
+    if config:
+        # Update existing config
+        config.bot_token = config_data.bot_token
+        config.chat_id = config_data.chat_id
+        config.updated_at = datetime.utcnow()
+    else:
+        # Create new config
+        config = AlertConfig(
+            bot_token=config_data.bot_token,
+            chat_id=config_data.chat_id,
+            gtt_alerts_enabled=True,
+            loss_alerts_enabled=True,
+            daily_summary_enabled=True,
+            order_alerts_enabled=True,
+            loss_threshold_pct=5.0
+        )
+        db.add(config)
+
+    db.commit()
+    db.refresh(config)
+
+    # Mask bot token for response
+    masked_token = config.bot_token[:8] + "..." + config.bot_token[-4:] if len(config.bot_token) > 12 else "***"
+
+    return AlertConfigResponse(
+        id=config.id,
+        chat_id=config.chat_id,
+        bot_token_masked=masked_token,
+        gtt_alerts_enabled=config.gtt_alerts_enabled,
+        loss_alerts_enabled=config.loss_alerts_enabled,
+        daily_summary_enabled=config.daily_summary_enabled,
+        order_alerts_enabled=config.order_alerts_enabled,
+        loss_threshold_pct=config.loss_threshold_pct,
+        created_at=config.created_at,
+        updated_at=config.updated_at
+    )
+
+@app.put("/alerts/config", response_model=AlertConfigResponse)
+def update_alert_config(config_update: AlertConfigUpdate, db: Session = Depends(get_db)):
+    """Update Telegram alert configuration settings"""
+    config = db.query(AlertConfig).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Alert config not found. Please create config first.")
+
+    for field, value in config_update.model_dump(exclude_unset=True).items():
+        setattr(config, field, value)
+
+    config.updated_at = datetime.utcnow()
+    db.commit()
+    db.refresh(config)
+
+    # Mask bot token for response
+    masked_token = config.bot_token[:8] + "..." + config.bot_token[-4:] if len(config.bot_token) > 12 else "***"
+
+    return AlertConfigResponse(
+        id=config.id,
+        chat_id=config.chat_id,
+        bot_token_masked=masked_token,
+        gtt_alerts_enabled=config.gtt_alerts_enabled,
+        loss_alerts_enabled=config.loss_alerts_enabled,
+        daily_summary_enabled=config.daily_summary_enabled,
+        order_alerts_enabled=config.order_alerts_enabled,
+        loss_threshold_pct=config.loss_threshold_pct,
+        created_at=config.created_at,
+        updated_at=config.updated_at
+    )
+
+@app.post("/alerts/test")
+def test_alert(db: Session = Depends(get_db)):
+    """Send a test message to Telegram"""
+    telegram = TelegramAlerts(db)
+    result = telegram.test_connection()
+    return result
+
+@app.get("/alerts/history", response_model=List[AlertHistoryResponse])
+def get_alert_history(limit: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
+    """Get recent alert history"""
+    telegram = TelegramAlerts(db)
+    return telegram.get_alert_history(limit)
+
+@app.post("/alerts/toggle/{alert_type}")
+def toggle_alert(alert_type: str, enabled: bool = Query(...), db: Session = Depends(get_db)):
+    """Enable/disable specific alert type"""
+    config = db.query(AlertConfig).first()
+    if not config:
+        raise HTTPException(status_code=404, detail="Alert config not found")
+
+    valid_types = ["gtt", "loss", "daily_summary", "order"]
+    if alert_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"Invalid alert type. Must be one of: {', '.join(valid_types)}")
+
+    # Map alert type to config field
+    field_map = {
+        "gtt": "gtt_alerts_enabled",
+        "loss": "loss_alerts_enabled",
+        "daily_summary": "daily_summary_enabled",
+        "order": "order_alerts_enabled"
+    }
+
+    setattr(config, field_map[alert_type], enabled)
+    config.updated_at = datetime.utcnow()
+    db.commit()
+
+    return {"message": f"{alert_type}_alerts_enabled set to {enabled}"}
 
 # ==================== HEALTH ====================
 

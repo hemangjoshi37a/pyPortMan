@@ -167,3 +167,36 @@ class GTTOrder(Base):
 
     def __repr__(self):
         return f"<GTTOrder(gtt_id='{self.gtt_id}', stock='{self.stock}', status='{self.status}')>"
+
+
+class AlertConfig(Base):
+    """Telegram alert configuration"""
+    __tablename__ = "alert_config"
+
+    id = Column(Integer, primary_key=True, index=True)
+    bot_token = Column(String(255), nullable=True)  # Telegram bot token
+    chat_id = Column(String(100), nullable=True)  # Telegram chat ID
+    gtt_alerts_enabled = Column(Boolean, default=True)  # GTT triggered alerts
+    loss_alerts_enabled = Column(Boolean, default=True)  # Big loss alerts
+    daily_summary_enabled = Column(Boolean, default=True)  # Daily summary alerts
+    order_alerts_enabled = Column(Boolean, default=True)  # Order alerts
+    loss_threshold_pct = Column(Float, default=5.0)  # Loss threshold percentage
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f"<AlertConfig(id={self.id}, chat_id='{self.chat_id}')>"
+
+
+class AlertHistory(Base):
+    """History of sent alerts"""
+    __tablename__ = "alert_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    alert_type = Column(String(50), nullable=False, index=True)  # GTT_TRIGGERED, BIG_LOSS, etc.
+    message = Column(Text, nullable=False)
+    sent_at = Column(DateTime, default=datetime.utcnow, index=True)
+    success = Column(Boolean, default=False)
+
+    def __repr__(self):
+        return f"<AlertHistory(id={self.id}, alert_type='{self.alert_type}', success={self.success})>"
