@@ -37,11 +37,14 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from database import get_db, init_db
-from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder, AlertConfig, AlertHistory
+from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder, AlertConfig, AlertHistory, PriceAlert
 from kite_manager import KiteManager
 from gtt_manager import GTTManager
 from scheduler import get_scheduler
 from telegram_alerts import TelegramAlerts
+from auto_login import AutoLoginManager, run_async
+from price_alerts import PriceAlertManager
+from analytics import AnalyticsManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -273,6 +276,78 @@ class AlertHistoryResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+# ==================== AUTO LOGIN MODELS ====================
+
+class AutoLoginCredentials(BaseModel):
+    password: str = Field(..., description="Zerodha password")
+    totp_secret: str = Field(..., description="TOTP secret from Google Authenticator")
+
+class AutoLoginStatusResponse(BaseModel):
+    account_id: int
+    account_name: str
+    auto_login_enabled: bool
+    has_credentials: bool
+    last_token_refresh: Optional[datetime]
+    token_expires_at: Optional[datetime]
+    token_expired: bool
+
+class TokenRefreshResult(BaseModel):
+    account_id: int
+    account_name: str
+    status: str
+    error: Optional[str] = None
+    token_expires_at: Optional[str] = None
+
+class TokenRefreshSummary(BaseModel):
+    total: int
+    success: int
+    failed: int
+    accounts: List[TokenRefreshResult]
+
+# ==================== PRICE ALERT MODELS ====================
+
+class PriceAlertCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    alert_type: str = Field(..., description="Alert type: ABOVE or BELOW")
+    target_price: float = Field(..., description="Target price")
+    repeat: bool = Field(default=False, description="Whether to repeat alert")
+    repeat_interval: int = Field(default=24, description="Repeat interval in hours")
+
+class PriceAlertUpdate(BaseModel):
+    target_price: Optional[float] = None
+    alert_type: Optional[str] = None
+    repeat: Optional[bool] = None
+    repeat_interval: Optional[int] = None
+    status: Optional[str] = None
+
+class PriceAlertResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    alert_type: str
+    target_price: float
+    current_price: float
+    status: str
+    repeat: bool
+    repeat_interval: int
+    triggered_count: int
+    triggered_at: Optional[datetime]
+    next_trigger_at: Optional[datetime]
+    last_checked_at: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class PriceAlertSummary(BaseModel):
+    total: int
+    active: int
+    triggered: int
+    completed: int
 
 # Startup event
 @app.on_event("startup")
@@ -997,6 +1072,215 @@ def toggle_alert(alert_type: str, enabled: bool = Query(...), db: Session = Depe
     db.commit()
 
     return {"message": f"{alert_type}_alerts_enabled set to {enabled}"}
+
+# ==================== AUTO LOGIN ====================
+
+@app.get("/auto-login/status/{account_id}", response_model=AutoLoginStatusResponse)
+def get_auto_login_status(account_id: int, db: Session = Depends(get_db)):
+    """Get auto-login status for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = AutoLoginManager(db)
+    return manager.get_auto_login_status(account_id)
+
+@app.post("/auto-login/credentials/{account_id}")
+def save_auto_login_credentials(account_id: int, credentials: AutoLoginCredentials, db: Session = Depends(get_db)):
+    """Save encrypted credentials for auto-login"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = AutoLoginManager(db)
+    success = manager.save_credentials(account_id, credentials.password, credentials.totp_secret)
+
+    if success:
+        return {"message": "Credentials saved successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to save credentials")
+
+@app.delete("/auto-login/credentials/{account_id}")
+def remove_auto_login_credentials(account_id: int, db: Session = Depends(get_db)):
+    """Remove credentials and disable auto-login"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = AutoLoginManager(db)
+    success = manager.remove_credentials(account_id)
+
+    if success:
+        return {"message": "Credentials removed successfully"}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to remove credentials")
+
+@app.post("/auto-login/refresh/{account_id}")
+def refresh_account_token(account_id: int, db: Session = Depends(get_db)):
+    """Manually refresh access token for a specific account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = AutoLoginManager(db)
+    access_token = run_async(manager.refresh_account(account_id))
+
+    if access_token:
+        return {"message": "Token refreshed successfully", "token_expires_at": account.token_expires_at.isoformat()}
+    else:
+        raise HTTPException(status_code=500, detail="Failed to refresh token")
+
+@app.post("/auto-login/refresh-all")
+def refresh_all_tokens(db: Session = Depends(get_db)):
+    """Refresh tokens for all accounts with auto-login enabled"""
+    manager = AutoLoginManager(db)
+    results = run_async(manager.refresh_all_accounts())
+    return results
+
+@app.put("/auto-login/toggle/{account_id}")
+def toggle_auto_login(account_id: int, enabled: bool = Query(...), db: Session = Depends(get_db)):
+    """Enable/disable auto-login for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if enabled and not (account.password and account.totp_secret):
+        raise HTTPException(status_code=400, detail="Credentials must be saved before enabling auto-login")
+
+    account.auto_login_enabled = enabled
+    db.commit()
+
+    return {"message": f"Auto-login {'enabled' if enabled else 'disabled'} for account {account.name}"}
+
+# ==================== PRICE ALERTS ====================
+
+@app.get("/price-alerts", response_model=List[PriceAlertResponse])
+def get_price_alerts(account_id: Optional[int] = None, status: str = "ACTIVE", db: Session = Depends(get_db)):
+    """Get price alerts"""
+    manager = PriceAlertManager(db)
+    return manager.get_alerts(account_id, status)
+
+@app.get("/price-alerts/{alert_id}", response_model=PriceAlertResponse)
+def get_price_alert(alert_id: int, db: Session = Depends(get_db)):
+    """Get a specific price alert"""
+    manager = PriceAlertManager(db)
+    alert = manager.get_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+@app.post("/price-alerts", response_model=PriceAlertResponse, status_code=status.HTTP_201_CREATED)
+def create_price_alert(account_id: int, alert: PriceAlertCreate, db: Session = Depends(get_db)):
+    """Create a new price alert"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    if alert.alert_type not in ["ABOVE", "BELOW"]:
+        raise HTTPException(status_code=400, detail="alert_type must be 'ABOVE' or 'BELOW'")
+
+    manager = PriceAlertManager(db)
+    alert_data = alert.model_dump()
+    alert_data["account_id"] = account_id
+
+    created_alert = manager.create_alert(alert_data)
+    return created_alert
+
+@app.put("/price-alerts/{alert_id}", response_model=PriceAlertResponse)
+def update_price_alert(alert_id: int, alert_update: PriceAlertUpdate, db: Session = Depends(get_db)):
+    """Update a price alert"""
+    manager = PriceAlertManager(db)
+    updated_alert = manager.update_alert(alert_id, alert_update.model_dump(exclude_none=True))
+
+    if not updated_alert:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+    return updated_alert
+
+@app.delete("/price-alerts/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_price_alert(alert_id: int, db: Session = Depends(get_db)):
+    """Delete a price alert"""
+    manager = PriceAlertManager(db)
+    success = manager.delete_alert(alert_id)
+
+    if not success:
+        raise HTTPException(status_code=404, detail="Alert not found")
+
+@app.get("/price-alerts/summary", response_model=PriceAlertSummary)
+def get_price_alert_summary(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get summary of price alerts"""
+    manager = PriceAlertManager(db)
+    return manager.get_alert_summary(account_id)
+
+@app.post("/price-alerts/check")
+def check_price_alerts(db: Session = Depends(get_db)):
+    """Manually check all active price alerts"""
+    manager = PriceAlertManager(db)
+    triggered = manager.check_alerts()
+    return {"triggered_count": len(triggered), "alerts": triggered}
+
+@app.post("/price-alerts/cleanup")
+def cleanup_old_price_alerts(days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
+    """Clean up old completed alerts"""
+    manager = PriceAlertManager(db)
+    deleted = manager.cleanup_old_alerts(days)
+    return {"deleted_count": deleted}
+
+# ==================== ANALYTICS ====================
+
+@app.get("/analytics/overview")
+def get_analytics_overview(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get comprehensive portfolio overview"""
+    manager = AnalyticsManager(db)
+    return manager.get_portfolio_overview(account_id)
+
+@app.get("/analytics/allocation")
+def get_analytics_allocation(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get stock-wise allocation breakdown"""
+    manager = AnalyticsManager(db)
+    return manager.get_stock_allocation(account_id)
+
+@app.get("/analytics/pnl-breakdown")
+def get_analytics_pnl_breakdown(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get detailed P&L breakdown"""
+    manager = AnalyticsManager(db)
+    return manager.get_pnl_breakdown(account_id)
+
+@app.get("/analytics/risk-metrics")
+def get_analytics_risk_metrics(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Calculate risk metrics for the portfolio"""
+    manager = AnalyticsManager(db)
+    return manager.get_risk_metrics(account_id)
+
+@app.get("/analytics/equity-curve")
+def get_analytics_equity_curve(days: int = Query(30, ge=1, le=365), account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get equity curve data for charting"""
+    manager = AnalyticsManager(db)
+    return manager.get_equity_curve(days, account_id)
+
+@app.get("/analytics/account-comparison")
+def get_analytics_account_comparison(db: Session = Depends(get_db)):
+    """Get comparison data across all accounts"""
+    manager = AnalyticsManager(db)
+    return manager.get_account_comparison()
+
+@app.get("/analytics/performance-summary")
+def get_analytics_performance_summary(days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
+    """Get performance summary over a period"""
+    manager = AnalyticsManager(db)
+    return manager.get_performance_summary(days)
+
+@app.get("/analytics/sector-analysis")
+def get_analytics_sector_analysis(db: Session = Depends(get_db)):
+    """Get sector-wise analysis"""
+    manager = AnalyticsManager(db)
+    return manager.get_sector_analysis()
+
+@app.get("/analytics/trading-activity")
+def get_analytics_trading_activity(days: int = Query(30, ge=1, le=365), db: Session = Depends(get_db)):
+    """Get trading activity summary"""
+    manager = AnalyticsManager(db)
+    return manager.get_trading_activity(days)
 
 # ==================== HEALTH ====================
 
