@@ -15,6 +15,8 @@ from database import SessionLocal
 from kite_manager import KiteManager
 from gtt_manager import GTTManager
 from telegram_alerts import TelegramAlerts
+from auto_login import AutoLoginManager, run_async
+from price_alerts import PriceAlertManager
 
 # Configure logging
 logging.basicConfig(
@@ -261,6 +263,41 @@ class MarketScheduler:
         except Exception as e:
             logger.error(f"Error sending daily summary: {e}")
 
+    def refresh_access_tokens(self):
+        """Refresh access tokens for all accounts with auto-login enabled at 7:30 AM IST"""
+        try:
+            db = SessionLocal()
+            auto_login_manager = AutoLoginManager(db)
+
+            logger.info("Starting daily token refresh")
+            results = run_async(auto_login_manager.refresh_all_accounts())
+
+            logger.info(f"Token refresh complete: {results['success']} success, {results['failed']} failed")
+
+            db.close()
+        except Exception as e:
+            logger.error(f"Error refreshing access tokens: {e}")
+
+    def check_price_alerts(self):
+        """Check all active price alerts and trigger if conditions are met"""
+        if not self.is_market_hours():
+            logger.info("Skipping price alert check - outside market hours")
+            return
+
+        try:
+            db = SessionLocal()
+            price_alert_manager = PriceAlertManager(db)
+
+            logger.info("Checking price alerts")
+            triggered = price_alert_manager.check_alerts()
+
+            if triggered:
+                logger.info(f"Triggered {len(triggered)} price alerts")
+
+            db.close()
+        except Exception as e:
+            logger.error(f"Error checking price alerts: {e}")
+
     def start(self):
         """Start the scheduler"""
         if self.is_running:
@@ -318,6 +355,24 @@ class MarketScheduler:
             trigger=CronTrigger(hour=15, minute=35),
             id='daily_summary',
             name='Send daily summary',
+            replace_existing=True
+        )
+
+        # Refresh access tokens at 7:30 AM IST daily
+        self.scheduler.add_job(
+            self.refresh_access_tokens,
+            trigger=CronTrigger(hour=7, minute=30),
+            id='refresh_tokens',
+            name='Refresh access tokens',
+            replace_existing=True
+        )
+
+        # Check price alerts every 2 minutes during market hours
+        self.scheduler.add_job(
+            self.check_price_alerts,
+            trigger=IntervalTrigger(minutes=2),
+            id='check_price_alerts',
+            name='Check price alerts',
             replace_existing=True
         )
 

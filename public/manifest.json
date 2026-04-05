@@ -1,0 +1,62 @@
+{
+  "background_color": "#0f172a",
+  "categories": ["finance", "business"],
+  "description": "Zerodha Multi-Account Portfolio Management",
+  "display": "standalone",
+  "icons": [
+    {
+      "purpose": "any maskable",
+      "sizes": "192x192",
+      "src": "/icon-192x192.png",
+      "type": "image/png"
+    },
+    {
+      "purpose": "any maskable",
+      "sizes": "512x512",
+      "src": "/icon-512x512.png",
+      "type": "image/png"
+    }
+  ],
+  "name": "pyPortMan - Portfolio Manager",
+  "orientation": "portrait",
+  "screenshots": [
+    {
+      "form_factor": "wide",
+      "sizes": "1280x720",
+      "src": "/screenshot-wide.png",
+      "type": "image/png"
+    },
+    {
+      "form_factor": "narrow",
+      "sizes": "750x1334",
+      "src": "/screenshot-narrow.png",
+      "type": "image/png"
+    }
+  ],
+  "short_name": "pyPortMan",
+  "shortcuts": [
+    {
+      "description": "View your portfolio holdings",
+      "icons": [{"sizes": "192x192", "src": "/icon-192x192.png"}],
+      "name": "View Portfolio",
+      "short_name": "Portfolio",
+      "url": "/portfolio"
+    },
+    {
+      "description": "View your open positions",
+      "icons": [{"sizes": "192x192", "src": "/icon-192x192.png"}],
+      "name": "View Positions",
+      "short_name": "Positions",
+      "url": "/positions"
+    },
+    {
+      "description": "View your recent orders",
+      "icons": [{"sizes": "192x192", "src": "/icon-192x192.png"}],
+      "name": "View Orders",
+      "short_name": "Orders",
+      "url": "/orders"
+    }
+  ],
+  "start_url": "/",
+  "theme_color": "#3b82f6"
+}

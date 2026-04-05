@@ -26,6 +26,12 @@ class Account(Base):
     last_login_at = Column(DateTime, nullable=True)
     token_expires_at = Column(DateTime, nullable=True)
 
+    # Auto-login fields
+    password = Column(Text, nullable=True)  # Encrypted Zerodha password
+    totp_secret = Column(Text, nullable=True)  # Encrypted TOTP secret
+    last_token_refresh = Column(DateTime, nullable=True)  # Last successful auto-refresh
+    auto_login_enabled = Column(Boolean, default=False)  # Enable/disable auto-login
+
     # Relationships
     holdings = relationship("Holding", back_populates="account", cascade="all, delete-orphan")
     orders = relationship("Order", back_populates="account", cascade="all, delete-orphan")
@@ -200,3 +206,31 @@ class AlertHistory(Base):
 
     def __repr__(self):
         return f"<AlertHistory(id={self.id}, alert_type='{self.alert_type}', success={self.success})>"
+
+
+class PriceAlert(Base):
+    """Custom price alerts on stocks"""
+    __tablename__ = "price_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    stock = Column(String(50), nullable=False, index=True)
+    exchange = Column(String(20), default="NSE")
+    alert_type = Column(String(10), nullable=False)  # ABOVE, BELOW
+    target_price = Column(Float, nullable=False)
+    current_price = Column(Float, default=0)
+    status = Column(String(20), default="ACTIVE")  # ACTIVE, TRIGGERED, COMPLETED
+    repeat = Column(Boolean, default=False)
+    repeat_interval = Column(Integer, default=24)  # Hours
+    triggered_count = Column(Integer, default=0)
+    triggered_at = Column(DateTime, nullable=True)
+    next_trigger_at = Column(DateTime, nullable=True)
+    last_checked_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    account = relationship("Account")
+
+    def __repr__(self):
+        return f"<PriceAlert(id={self.id}, stock='{self.stock}', alert_type='{self.alert_type}', target={self.target_price})>"
