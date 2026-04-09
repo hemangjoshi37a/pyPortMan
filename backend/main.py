@@ -37,7 +37,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from database import get_db, init_db
-from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder, AlertConfig, AlertHistory, PriceAlert
+from models import Account, Holding, Order, Position, PortfolioSnapshot, GTTOrder, AlertConfig, AlertHistory, PriceAlert, Watchlist
 from kite_manager import KiteManager
 from gtt_manager import GTTManager
 from scheduler import get_scheduler
@@ -45,6 +45,7 @@ from telegram_alerts import TelegramAlerts
 from auto_login import AutoLoginManager, run_async
 from price_alerts import PriceAlertManager
 from analytics import AnalyticsManager
+from watchlist_manager import WatchlistManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -348,6 +349,66 @@ class PriceAlertSummary(BaseModel):
     active: int
     triggered: int
     completed: int
+
+# ==================== WATCHLIST MODELS ====================
+
+class WatchlistCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    category: str = Field(default="Default", description="Category/group name")
+    notes: Optional[str] = Field(None, description="User notes about the stock")
+    target_buy_price: Optional[float] = Field(None, description="Desired buy price")
+    target_sell_price: Optional[float] = Field(None, description="Desired sell price")
+    priority: int = Field(default=0, description="Priority for sorting (higher = first)")
+
+class WatchlistUpdate(BaseModel):
+    category: Optional[str] = None
+    notes: Optional[str] = None
+    target_buy_price: Optional[float] = None
+    target_sell_price: Optional[float] = None
+    priority: Optional[int] = None
+    exchange: Optional[str] = None
+
+class WatchlistResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    category: str
+    notes: Optional[str]
+    target_buy_price: Optional[float]
+    target_sell_price: Optional[float]
+    current_price: float
+    day_change: float
+    day_change_pct: float
+    is_active: bool
+    priority: int
+    last_price_update: Optional[datetime]
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class WatchlistBulkRequest(BaseModel):
+    stock_list: List[WatchlistCreate]
+
+class WatchlistSummary(BaseModel):
+    total_items: int
+    total_value: float
+    avg_change_pct: float
+    gainers_count: int
+    losers_count: int
+    categories: Dict[str, int]
+    top_gainer: Optional[Dict[str, Any]]
+    top_loser: Optional[Dict[str, Any]]
+
+class PriceTargetItem(BaseModel):
+    stock: str
+    current_price: float
+    target_type: str
+    target_price: float
+    diff_pct: float
 
 # Startup event
 @app.on_event("startup")
@@ -1281,6 +1342,132 @@ def get_analytics_trading_activity(days: int = Query(30, ge=1, le=365), db: Sess
     """Get trading activity summary"""
     manager = AnalyticsManager(db)
     return manager.get_trading_activity(days)
+
+# ==================== WATCHLIST ====================
+
+@app.get("/watchlist", response_model=List[WatchlistResponse])
+def get_watchlist(
+    account_id: Optional[int] = None,
+    category: Optional[str] = None,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db)
+):
+    """Get watchlist items"""
+    manager = WatchlistManager(db)
+    return manager.get_watchlist(account_id, category, include_inactive)
+
+@app.get("/watchlist/{account_id}", response_model=List[WatchlistResponse])
+def get_account_watchlist(
+    account_id: int,
+    category: Optional[str] = None,
+    include_inactive: bool = False,
+    db: Session = Depends(get_db)
+):
+    """Get watchlist for a specific account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    return manager.get_watchlist(account_id, category, include_inactive)
+
+@app.post("/watchlist", response_model=WatchlistResponse, status_code=status.HTTP_201_CREATED)
+def add_to_watchlist(account_id: int, item: WatchlistCreate, db: Session = Depends(get_db)):
+    """Add a stock to watchlist"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    try:
+        return manager.add_to_watchlist(account_id, item.model_dump())
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/watchlist/{watchlist_id}", response_model=WatchlistResponse)
+def update_watchlist_item(
+    watchlist_id: int,
+    account_id: int,
+    update_data: WatchlistUpdate,
+    db: Session = Depends(get_db)
+):
+    """Update a watchlist item"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    try:
+        return manager.update_watchlist_item(account_id, watchlist_id, update_data.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/watchlist/{watchlist_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_from_watchlist(watchlist_id: int, account_id: int, db: Session = Depends(get_db)):
+    """Remove a stock from watchlist"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    try:
+        manager.remove_from_watchlist(account_id, watchlist_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/watchlist/bulk")
+def bulk_add_to_watchlist(account_id: int, request: WatchlistBulkRequest, db: Session = Depends(get_db)):
+    """Add multiple stocks to watchlist"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    return manager.bulk_add_to_watchlist(account_id, [s.model_dump() for s in request.stock_list])
+
+@app.post("/watchlist/update-prices")
+def update_watchlist_prices(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Update current prices for all watchlist items"""
+    manager = WatchlistManager(db)
+    return manager.update_all_prices(account_id)
+
+@app.get("/watchlist/summary", response_model=WatchlistSummary)
+def get_watchlist_summary(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get watchlist summary statistics"""
+    manager = WatchlistManager(db)
+    return manager.get_watchlist_summary(account_id)
+
+@app.get("/watchlist/categories")
+def get_watchlist_categories(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get all unique categories in watchlist"""
+    manager = WatchlistManager(db)
+    return {"categories": manager.get_categories(account_id)}
+
+@app.get("/watchlist/search", response_model=List[WatchlistResponse])
+def search_watchlist(account_id: int, search_term: str = Query(..., min_length=1), db: Session = Depends(get_db)):
+    """Search watchlist by stock symbol or notes"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    return manager.search_watchlist(account_id, search_term)
+
+@app.get("/watchlist/price-targets", response_model=List[PriceTargetItem])
+def get_price_targets(account_id: int, db: Session = Depends(get_db)):
+    """Get stocks that are near their target buy/sell prices (within 5%)"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = WatchlistManager(db)
+    return manager.get_price_targets(account_id)
 
 # ==================== HEALTH ====================
 

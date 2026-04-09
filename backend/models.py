@@ -38,6 +38,7 @@ class Account(Base):
     positions = relationship("Position", back_populates="account", cascade="all, delete-orphan")
     portfolio_snapshots = relationship("PortfolioSnapshot", back_populates="account", cascade="all, delete-orphan")
     gtt_orders = relationship("GTTOrder", cascade="all, delete-orphan")
+    watchlist = relationship("Watchlist", cascade="all, delete-orphan")
 
     def __repr__(self):
         return f"<Account(id={self.id}, name='{self.name}', account_id='{self.account_id}')>"
@@ -234,3 +235,31 @@ class PriceAlert(Base):
 
     def __repr__(self):
         return f"<PriceAlert(id={self.id}, stock='{self.stock}', alert_type='{self.alert_type}', target={self.target_price})>"
+
+
+class Watchlist(Base):
+    """Watchlist for tracking stocks of interest"""
+    __tablename__ = "watchlist"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=False, index=True)
+    stock = Column(String(50), nullable=False, index=True)
+    exchange = Column(String(20), default="NSE")
+    category = Column(String(50), default="Default")  # Category/group name
+    notes = Column(Text, nullable=True)  # User notes about the stock
+    target_buy_price = Column(Float, nullable=True)  # Desired buy price
+    target_sell_price = Column(Float, nullable=True)  # Desired sell price
+    current_price = Column(Float, default=0)
+    day_change = Column(Float, default=0)
+    day_change_pct = Column(Float, default=0)
+    is_active = Column(Boolean, default=True)
+    priority = Column(Integer, default=0)  # Higher priority = show first
+    last_price_update = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    account = relationship("Account", back_populates="watchlist")
+
+    def __repr__(self):
+        return f"<Watchlist(id={self.id}, stock='{self.stock}', category='{self.category}')>"
