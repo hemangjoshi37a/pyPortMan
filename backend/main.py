@@ -47,6 +47,7 @@ from price_alerts import PriceAlertManager
 from analytics import AnalyticsManager
 from watchlist_manager import WatchlistManager
 from position_sizing import PositionSizingManager
+from charts import ChartsManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -1751,6 +1752,94 @@ def get_risk_summary(account_id: int, db: Session = Depends(get_db)):
 
     manager = PositionSizingManager(db)
     return manager.get_risk_summary(account_id)
+
+# ==================== CHARTS ====================
+
+@app.get("/charts/equity-curve")
+def get_equity_curve_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get equity curve data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_equity_curve_data(account_id, days)
+
+@app.get("/charts/pnl-distribution")
+def get_pnl_distribution_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get P&L distribution data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_pnl_distribution(account_id)
+
+@app.get("/charts/sector-allocation")
+def get_sector_allocation_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get sector allocation data for pie chart"""
+    manager = ChartsManager(db)
+    return manager.get_sector_allocation(account_id)
+
+@app.get("/charts/monthly-performance")
+def get_monthly_performance_chart(
+    account_id: Optional[int] = None,
+    months: int = Query(12, ge=1, le=24),
+    db: Session = Depends(get_db)
+):
+    """Get monthly performance data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_monthly_performance(account_id, months)
+
+@app.get("/charts/account-comparison")
+def get_account_comparison_chart(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get account comparison data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_account_comparison(days)
+
+@app.get("/charts/top-performers")
+def get_top_performers_chart(
+    account_id: Optional[int] = None,
+    limit: int = Query(10, ge=1, le=20),
+    db: Session = Depends(get_db)
+):
+    """Get top performing stocks data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_top_performers(account_id, limit)
+
+@app.get("/charts/exposure-over-time")
+def get_exposure_over_time_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get exposure over time data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_exposure_over_time(account_id, days)
+
+@app.get("/charts/win-loss-ratio")
+def get_win_loss_ratio_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get win/loss ratio data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_win_loss_ratio(account_id, days)
+
+@app.get("/charts/dashboard-summary")
+def get_dashboard_summary_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get complete dashboard summary with all chart data"""
+    manager = ChartsManager(db)
+    return manager.get_dashboard_summary(account_id)
 
 # ==================== HEALTH ====================
 
