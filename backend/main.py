@@ -46,6 +46,8 @@ from auto_login import AutoLoginManager, run_async
 from price_alerts import PriceAlertManager
 from analytics import AnalyticsManager
 from watchlist_manager import WatchlistManager
+from position_sizing import PositionSizingManager
+from charts import ChartsManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -161,6 +163,36 @@ class PositionSquareoffRequest(BaseModel):
     exchange: str = "NSE"
     order_type: str = "MARKET"
     product: str = "MIS"
+
+class CoverOrderRequest(BaseModel):
+    tradingsymbol: str
+    exchange: str = "NSE"
+    transaction_type: str  # BUY or SELL
+    quantity: int
+    order_type: str = "MARKET"  # MARKET or LIMIT
+    price: Optional[float] = None  # Required for LIMIT orders
+    stoploss: float  # Mandatory stop-loss price
+    trigger_price: Optional[float] = None  # Optional trigger price for stop-loss
+
+class BracketOrderRequest(BaseModel):
+    tradingsymbol: str
+    exchange: str = "NSE"
+    transaction_type: str  # BUY or SELL
+    quantity: int
+    order_type: str = "LIMIT"  # LIMIT only for BO
+    price: float  # Entry price
+    target: float  # Target price
+    stoploss: float  # Stop-loss price
+    trailing_stoploss: Optional[float] = None  # Optional trailing stop-loss
+
+class AMOOrderRequest(BaseModel):
+    tradingsymbol: str
+    exchange: str = "NSE"
+    transaction_type: str  # BUY or SELL
+    quantity: int
+    order_type: str = "LIMIT"  # LIMIT or MARKET
+    price: Optional[float] = None  # Required for LIMIT orders
+    product: str = "CNC"  # CNC or MIS
 
 class AuthCallbackRequest(BaseModel):
     account_id: int
@@ -410,6 +442,45 @@ class PriceTargetItem(BaseModel):
     target_price: float
     diff_pct: float
 
+# ==================== POSITION SIZING MODELS ====================
+
+class FixedFractionalRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    risk_per_trade_pct: float = Field(default=2.0, ge=0.1, le=100, description="Risk percentage per trade")
+    stop_loss_pct: float = Field(default=5.0, ge=0.1, le=100, description="Stop loss percentage")
+
+class KellyCriterionRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    win_rate: float = Field(default=0.55, ge=0.01, le=0.99, description="Historical win rate (0-1)")
+    avg_win_pct: float = Field(default=10.0, ge=0.1, description="Average win percentage")
+    avg_loss_pct: float = Field(default=5.0, ge=0.1, description="Average loss percentage")
+    kelly_fraction: float = Field(default=0.25, ge=0.01, le=1.0, description="Fraction of Kelly to use")
+
+class VolatilityBasedRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    atr: float = Field(..., gt=0, description="Average True Range (volatility measure)")
+    risk_per_trade_pct: float = Field(default=2.0, ge=0.1, le=100, description="Risk percentage per trade")
+    atr_multiplier: float = Field(default=2.0, ge=0.5, le=5.0, description="ATR multiplier for stop loss")
+
+class FixedAmountRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    fixed_amount: float = Field(..., gt=0, description="Fixed amount to invest per trade")
+
+class PercentageBasedRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    allocation_pct: float = Field(..., gt=0, le=100, description="Percentage of capital to allocate")
+
+class CompareStrategiesRequest(BaseModel):
+    stock_price: float = Field(..., description="Current stock price")
+    atr: Optional[float] = Field(None, gt=0, description="Average True Range (optional)")
+    risk_per_trade_pct: float = Field(default=2.0, ge=0.1, le=100, description="Risk percentage per trade")
+    stop_loss_pct: float = Field(default=5.0, ge=0.1, le=100, description="Stop loss percentage")
+    win_rate: float = Field(default=0.55, ge=0.01, le=0.99, description="Historical win rate (0-1)")
+    avg_win_pct: float = Field(default=10.0, ge=0.1, description="Average win percentage")
+    avg_loss_pct: float = Field(default=5.0, ge=0.1, description="Average loss percentage")
+    fixed_amount: Optional[float] = Field(None, gt=0, description="Fixed amount (optional)")
+    allocation_pct: Optional[float] = Field(None, gt=0, le=100, description="Allocation percentage (optional)")
+
 # Startup event
 @app.on_event("startup")
 async def startup_event():
@@ -658,6 +729,108 @@ def cancel_order(order_id: str, account_id: int, db: Session = Depends(get_db)):
             logger.error(f"Error sending order cancel alert: {e}")
 
         return {"message": "Order cancelled successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== COVER ORDERS ====================
+
+@app.post("/orders/cover")
+def place_cover_order(account_id: int, order: CoverOrderRequest, db: Session = Depends(get_db)):
+    """Place a Cover Order (CO) - requires mandatory stop-loss"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        result = kite_manager.place_cover_order(account_id, order.model_dump())
+
+        # Send Telegram alert for order placed
+        try:
+            telegram = TelegramAlerts(db)
+            telegram.send_order_placed_alert(
+                account_id=account_id,
+                account_name=account.name,
+                stock=order.tradingsymbol,
+                qty=order.quantity,
+                price=order.price or 0,
+                order_type=f"CO-{order.order_type}",
+                transaction_type=order.transaction_type
+            )
+        except Exception as e:
+            logger.error(f"Error sending order alert: {e}")
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== BRACKET ORDERS ====================
+
+@app.post("/orders/bracket")
+def place_bracket_order(account_id: int, order: BracketOrderRequest, db: Session = Depends(get_db)):
+    """Place a Bracket Order (BO) - with automatic target and stop-loss"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        result = kite_manager.place_bracket_order(account_id, order.model_dump())
+
+        # Send Telegram alert for order placed
+        try:
+            telegram = TelegramAlerts(db)
+            telegram.send_order_placed_alert(
+                account_id=account_id,
+                account_name=account.name,
+                stock=order.tradingsymbol,
+                qty=order.quantity,
+                price=order.price,
+                order_type=f"BO-T:{order.target}-SL:{order.stoploss}",
+                transaction_type=order.transaction_type
+            )
+        except Exception as e:
+            logger.error(f"Error sending order alert: {e}")
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== AFTER MARKET ORDERS ====================
+
+@app.post("/orders/amo")
+def place_amo_order(account_id: int, order: AMOOrderRequest, db: Session = Depends(get_db)):
+    """Place an After Market Order (AMO) - for pre-market order placement"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        result = kite_manager.place_amo_order(account_id, order.model_dump())
+
+        # Send Telegram alert for order placed
+        try:
+            telegram = TelegramAlerts(db)
+            telegram.send_order_placed_alert(
+                account_id=account_id,
+                account_name=account.name,
+                stock=order.tradingsymbol,
+                qty=order.quantity,
+                price=order.price or 0,
+                order_type=f"AMO-{order.order_type}",
+                transaction_type=order.transaction_type
+            )
+        except Exception as e:
+            logger.error(f"Error sending order alert: {e}")
+
+        return result
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
@@ -1468,6 +1641,205 @@ def get_price_targets(account_id: int, db: Session = Depends(get_db)):
 
     manager = WatchlistManager(db)
     return manager.get_price_targets(account_id)
+
+# ==================== POSITION SIZING ====================
+
+@app.get("/position-sizing/capital/{account_id}")
+def get_account_capital(account_id: int, db: Session = Depends(get_db)):
+    """Get available capital for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.get_account_capital(account_id)
+
+@app.post("/position-sizing/fixed-fractional/{account_id}")
+def calculate_fixed_fractional(account_id: int, params: FixedFractionalRequest, db: Session = Depends(get_db)):
+    """Calculate position size using Fixed Fractional method"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.calculate_fixed_fractional(
+        account_id,
+        params.stock_price,
+        params.risk_per_trade_pct,
+        params.stop_loss_pct
+    )
+
+@app.post("/position-sizing/kelly-criterion/{account_id}")
+def calculate_kelly_criterion(account_id: int, params: KellyCriterionRequest, db: Session = Depends(get_db)):
+    """Calculate position size using Kelly Criterion"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.calculate_kelly_criterion(
+        account_id,
+        params.stock_price,
+        params.win_rate,
+        params.avg_win_pct,
+        params.avg_loss_pct,
+        params.kelly_fraction
+    )
+
+@app.post("/position-sizing/volatility-based/{account_id}")
+def calculate_volatility_based(account_id: int, params: VolatilityBasedRequest, db: Session = Depends(get_db)):
+    """Calculate position size using Volatility-based method"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.calculate_volatility_based(
+        account_id,
+        params.stock_price,
+        params.atr,
+        params.risk_per_trade_pct,
+        params.atr_multiplier
+    )
+
+@app.post("/position-sizing/fixed-amount/{account_id}")
+def calculate_fixed_amount(account_id: int, params: FixedAmountRequest, db: Session = Depends(get_db)):
+    """Calculate position size using Fixed Amount method"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.calculate_fixed_amount(account_id, params.stock_price, params.fixed_amount)
+
+@app.post("/position-sizing/percentage-based/{account_id}")
+def calculate_percentage_based(account_id: int, params: PercentageBasedRequest, db: Session = Depends(get_db)):
+    """Calculate position size using Percentage-based allocation"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.calculate_percentage_based(account_id, params.stock_price, params.allocation_pct)
+
+@app.post("/position-sizing/compare/{account_id}")
+def compare_position_sizing_strategies(account_id: int, params: CompareStrategiesRequest, db: Session = Depends(get_db)):
+    """Compare all position sizing strategies for a given stock"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.compare_strategies(
+        account_id,
+        params.stock_price,
+        params.atr,
+        params.risk_per_trade_pct,
+        params.stop_loss_pct,
+        params.win_rate,
+        params.avg_win_pct,
+        params.avg_loss_pct,
+        params.fixed_amount,
+        params.allocation_pct
+    )
+
+@app.get("/position-sizing/risk-summary/{account_id}")
+def get_risk_summary(account_id: int, db: Session = Depends(get_db)):
+    """Get risk summary for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = PositionSizingManager(db)
+    return manager.get_risk_summary(account_id)
+
+# ==================== CHARTS ====================
+
+@app.get("/charts/equity-curve")
+def get_equity_curve_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get equity curve data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_equity_curve_data(account_id, days)
+
+@app.get("/charts/pnl-distribution")
+def get_pnl_distribution_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get P&L distribution data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_pnl_distribution(account_id)
+
+@app.get("/charts/sector-allocation")
+def get_sector_allocation_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get sector allocation data for pie chart"""
+    manager = ChartsManager(db)
+    return manager.get_sector_allocation(account_id)
+
+@app.get("/charts/monthly-performance")
+def get_monthly_performance_chart(
+    account_id: Optional[int] = None,
+    months: int = Query(12, ge=1, le=24),
+    db: Session = Depends(get_db)
+):
+    """Get monthly performance data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_monthly_performance(account_id, months)
+
+@app.get("/charts/account-comparison")
+def get_account_comparison_chart(
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get account comparison data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_account_comparison(days)
+
+@app.get("/charts/top-performers")
+def get_top_performers_chart(
+    account_id: Optional[int] = None,
+    limit: int = Query(10, ge=1, le=20),
+    db: Session = Depends(get_db)
+):
+    """Get top performing stocks data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_top_performers(account_id, limit)
+
+@app.get("/charts/exposure-over-time")
+def get_exposure_over_time_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get exposure over time data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_exposure_over_time(account_id, days)
+
+@app.get("/charts/win-loss-ratio")
+def get_win_loss_ratio_chart(
+    account_id: Optional[int] = None,
+    days: int = Query(30, ge=1, le=365),
+    db: Session = Depends(get_db)
+):
+    """Get win/loss ratio data for charting"""
+    manager = ChartsManager(db)
+    return manager.get_win_loss_ratio(account_id, days)
+
+@app.get("/charts/dashboard-summary")
+def get_dashboard_summary_chart(
+    account_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """Get complete dashboard summary with all chart data"""
+    manager = ChartsManager(db)
+    return manager.get_dashboard_summary(account_id)
 
 # ==================== HEALTH ====================
 

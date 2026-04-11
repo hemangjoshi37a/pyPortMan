@@ -354,6 +354,139 @@ class KiteManager:
             logger.error(f"Error placing order: {e}")
             raise
 
+    def place_cover_order(self, account_id: int, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Place a Cover Order (CO) on Zerodha
+        Cover orders require a mandatory stop-loss and are only available for intraday (MIS) products.
+        params: {
+            "tradingsymbol": "RELIANCE",
+            "exchange": "NSE",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "order_type": "MARKET" or "LIMIT",
+            "price": 2000,  # Required for LIMIT orders
+            "stoploss": 1950,  # Mandatory stop-loss price
+            "trigger_price": 1945  # Optional trigger price for stop-loss
+        }
+        Returns order response from Zerodha
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        # Validate required parameters
+        if not params.get("stoploss"):
+            raise ValueError("Stop-loss is mandatory for Cover Orders")
+
+        try:
+            order_id = kite.place_order(
+                tradingsymbol=params.get("tradingsymbol"),
+                exchange=params.get("exchange", "NSE"),
+                transaction_type=params.get("transaction_type"),
+                quantity=params.get("quantity"),
+                order_type=params.get("order_type", "MARKET"),
+                product="MIS",  # Cover orders only work with MIS
+                price=params.get("price"),
+                validity="DAY",
+                variety="co",
+                stoploss=params.get("stoploss"),
+                trigger_price=params.get("trigger_price")
+            )
+
+            logger.info(f"Cover Order placed: {order_id}")
+            return {"order_id": order_id, "status": "PLACED", "variety": "co"}
+
+        except Exception as e:
+            logger.error(f"Error placing cover order: {e}")
+            raise
+
+    def place_bracket_order(self, account_id: int, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Place a Bracket Order (BO) on Zerodha
+        Bracket orders automatically place target and stop-loss orders when the main order is executed.
+        params: {
+            "tradingsymbol": "RELIANCE",
+            "exchange": "NSE",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "order_type": "LIMIT",
+            "price": 2000,  # Entry price
+            "target": 2100,  # Target price
+            "stoploss": 1950,  # Stop-loss price
+            "trailing_stoploss": 10  # Optional trailing stop-loss
+        }
+        Returns order response from Zerodha
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        # Validate required parameters
+        if not params.get("target") or not params.get("stoploss"):
+            raise ValueError("Target and stop-loss are mandatory for Bracket Orders")
+
+        try:
+            order_id = kite.place_order(
+                tradingsymbol=params.get("tradingsymbol"),
+                exchange=params.get("exchange", "NSE"),
+                transaction_type=params.get("transaction_type"),
+                quantity=params.get("quantity"),
+                order_type=params.get("order_type", "LIMIT"),
+                product="MIS",  # Bracket orders only work with MIS
+                price=params.get("price"),
+                validity="DAY",
+                variety="bo",
+                squareoff=params.get("target"),
+                stoploss=params.get("stoploss"),
+                trailing_stoploss=params.get("trailing_stoploss")
+            )
+
+            logger.info(f"Bracket Order placed: {order_id}")
+            return {"order_id": order_id, "status": "PLACED", "variety": "bo"}
+
+        except Exception as e:
+            logger.error(f"Error placing bracket order: {e}")
+            raise
+
+    def place_amo_order(self, account_id: int, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Place an After Market Order (AMO) on Zerodha
+        AMO allows placing orders outside market hours for execution when market opens.
+        params: {
+            "tradingsymbol": "RELIANCE",
+            "exchange": "NSE",
+            "transaction_type": "BUY",
+            "quantity": 10,
+            "order_type": "LIMIT" or "MARKET",
+            "price": 2000,  # Required for LIMIT orders
+            "product": "CNC" or "MIS"
+        }
+        Returns order response from Zerodha
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            order_id = kite.place_order(
+                tradingsymbol=params.get("tradingsymbol"),
+                exchange=params.get("exchange", "NSE"),
+                transaction_type=params.get("transaction_type"),
+                quantity=params.get("quantity"),
+                order_type=params.get("order_type", "LIMIT"),
+                product=params.get("product", "CNC"),
+                price=params.get("price"),
+                validity="DAY",
+                variety="amo"
+            )
+
+            logger.info(f"After Market Order placed: {order_id}")
+            return {"order_id": order_id, "status": "PLACED", "variety": "amo"}
+
+        except Exception as e:
+            logger.error(f"Error placing AMO: {e}")
+            raise
+
     def cancel_order(self, account_id: int, order_id: str) -> bool:
         """
         Cancel an order on Zerodha
