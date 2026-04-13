@@ -48,6 +48,8 @@ from analytics import AnalyticsManager
 from watchlist_manager import WatchlistManager
 from position_sizing import PositionSizingManager
 from charts import ChartsManager
+from technical_alerts import TechnicalAlertsManager
+from notifications import NotificationsManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -480,6 +482,71 @@ class CompareStrategiesRequest(BaseModel):
     avg_loss_pct: float = Field(default=5.0, ge=0.1, description="Average loss percentage")
     fixed_amount: Optional[float] = Field(None, gt=0, description="Fixed amount (optional)")
     allocation_pct: Optional[float] = Field(None, gt=0, le=100, description="Allocation percentage (optional)")
+
+# ==================== TECHNICAL ALERTS MODELS ====================
+
+class TechnicalAlertRequest(BaseModel):
+    stock: str = Field(..., description="Stock symbol")
+    prices: List[float] = Field(..., description="List of closing prices")
+    volumes: Optional[List[float]] = Field(None, description="Optional list of volume values")
+    rsi_period: int = Field(default=14, ge=5, le=50, description="RSI period")
+    rsi_overbought: float = Field(default=70.0, ge=50, le=100, description="RSI overbought threshold")
+    rsi_oversold: float = Field(default=30.0, ge=0, le=50, description="RSI oversold threshold")
+    ma_fast_period: int = Field(default=10, ge=5, le=50, description="Fast MA period")
+    ma_slow_period: int = Field(default=20, ge=5, le=100, description="Slow MA period")
+    bb_period: int = Field(default=20, ge=5, le=50, description="Bollinger Bands period")
+    bb_std_dev: float = Field(default=2.0, ge=0.5, le=5.0, description="Bollinger Bands std dev")
+
+class RSIAlertRequest(BaseModel):
+    prices: List[float] = Field(..., description="List of closing prices")
+    overbought: float = Field(default=70.0, ge=50, le=100, description="Overbought threshold")
+    oversold: float = Field(default=30.0, ge=0, le=50, description="Oversold threshold")
+
+class MACDAlertRequest(BaseModel):
+    prices: List[float] = Field(..., description="List of closing prices")
+    fast_period: int = Field(default=12, ge=5, le=50, description="Fast EMA period")
+    slow_period: int = Field(default=26, ge=5, le=100, description="Slow EMA period")
+    signal_period: int = Field(default=9, ge=5, le=50, description="Signal line period")
+
+class MACrossoverAlertRequest(BaseModel):
+    prices: List[float] = Field(..., description="List of closing prices")
+    fast_period: int = Field(default=10, ge=5, le=50, description="Fast MA period")
+    slow_period: int = Field(default=20, ge=5, le=100, description="Slow MA period")
+
+class BollingerBandsAlertRequest(BaseModel):
+    prices: List[float] = Field(..., description="List of closing prices")
+    period: int = Field(default=20, ge=5, le=50, description="Period for SMA")
+    std_dev: float = Field(default=2.0, ge=0.5, le=5.0, description="Standard deviation multiplier")
+
+class VolumeAlertRequest(BaseModel):
+    volumes: List[float] = Field(..., description="List of volume values")
+    avg_volume_period: int = Field(default=20, ge=5, le=100, description="Period for average volume")
+    volume_multiplier: float = Field(default=2.0, ge=1.0, le=10.0, description="Volume multiplier for spike")
+
+# ==================== NOTIFICATIONS MODELS ====================
+
+class EmailConfigRequest(BaseModel):
+    smtp_server: str = Field(default="smtp.gmail.com", description="SMTP server")
+    smtp_port: int = Field(default=587, ge=1, le=65535, description="SMTP port")
+    smtp_username: str = Field(..., description="SMTP username")
+    smtp_password: str = Field(..., description="SMTP password")
+    from_email: str = Field(..., description="From email address")
+
+class SMSConfigRequest(BaseModel):
+    service: str = Field(default="twilio", description="SMS service (twilio, etc.)")
+    account_sid: str = Field(..., description="Account SID")
+    auth_token: str = Field(..., description="Auth token")
+    from_number: str = Field(..., description="From phone number")
+
+class NotificationRequest(BaseModel):
+    notification_type: str = Field(..., description="email, sms, webhook, or all")
+    recipients: List[str] = Field(..., description="List of recipients")
+    alert_type: str = Field(..., description="Type of alert")
+    message: str = Field(..., description="Alert message")
+    data: Optional[Dict[str, Any]] = Field(None, description="Additional data")
+
+class TestNotificationRequest(BaseModel):
+    recipient: str = Field(..., description="Recipient address/number/URL")
 
 # Startup event
 @app.on_event("startup")
