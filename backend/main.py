@@ -801,6 +801,136 @@ def cancel_order(order_id: str, account_id: int, db: Session = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==================== ORDER MANAGEMENT ====================
+
+class OrderModifyRequest(BaseModel):
+    price: Optional[float] = None
+    quantity: Optional[int] = None
+    order_type: Optional[str] = None
+    validity: Optional[str] = None
+
+class BulkOrderRequest(BaseModel):
+    orders: List[OrderPlaceRequest]
+
+@app.put("/orders/{order_id}/modify")
+def modify_order(order_id: str, account_id: int, params: OrderModifyRequest, db: Session = Depends(get_db)):
+    """Modify an existing order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        result = kite_manager.modify_order(account_id, order_id, params.model_dump(exclude_none=True))
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{order_id}/details")
+def get_order_details(order_id: str, account_id: int, db: Session = Depends(get_db)):
+    """Get detailed information about a specific order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_details(account_id, order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/validate")
+def validate_order(account_id: int, order: OrderPlaceRequest, db: Session = Depends(get_db)):
+    """Validate order parameters before placing"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.validate_order(account_id, order.model_dump())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/bulk")
+def bulk_place_orders(account_id: int, request: BulkOrderRequest, db: Session = Depends(get_db)):
+    """Place multiple orders in bulk"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.bulk_place_orders(account_id, [o.model_dump() for o in request.orders])
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{account_id}/book")
+def get_order_book(account_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
+    """Get order book (list of all orders) for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_book(account_id, status)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/cancel-all-pending")
+def cancel_all_pending_orders(account_id: int, db: Session = Depends(get_db)):
+    """Cancel all pending orders for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.cancel_all_pending_orders(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{order_id}/trades")
+def get_order_trades(order_id: str, account_id: int, db: Session = Depends(get_db)):
+    """Get trade history for a specific order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_trades(account_id, order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{account_id}/trades")
+def get_trade_book(account_id: int, db: Session = Depends(get_db)):
+    """Get complete trade book (all executed trades) for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_trade_book(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 # ==================== COVER ORDERS ====================
 
 @app.post("/orders/cover")
@@ -1582,6 +1712,24 @@ def get_analytics_trading_activity(days: int = Query(30, ge=1, le=365), db: Sess
     """Get trading activity summary"""
     manager = AnalyticsManager(db)
     return manager.get_trading_activity(days)
+
+@app.get("/analytics/comprehensive-analysis")
+def get_comprehensive_analysis(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get comprehensive portfolio analysis with advanced metrics"""
+    manager = AnalyticsManager(db)
+    return manager.get_comprehensive_portfolio_analysis(account_id)
+
+@app.get("/analytics/correlation-matrix")
+def get_correlation_matrix(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get correlation matrix for portfolio holdings"""
+    manager = AnalyticsManager(db)
+    return manager.get_portfolio_correlation_matrix(account_id)
+
+@app.get("/analytics/portfolio-attribution")
+def get_portfolio_attribution(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Analyze portfolio performance attribution by stock and sector"""
+    manager = AnalyticsManager(db)
+    return manager.get_portfolio_attribution(account_id)
 
 # ==================== WATCHLIST ====================
 
