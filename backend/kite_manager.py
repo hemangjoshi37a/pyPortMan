@@ -979,3 +979,287 @@ class KiteManager:
         except Exception as e:
             logger.error(f"Error refreshing data for account {account_id}: {e}")
             raise
+
+    def fetch_stock_quote(self, account_id: int, tradingsymbol: str, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
+        """
+        Fetch current quote (price) for a stock
+        Returns dict with last_price, day_high, day_low, volume, etc.
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return None
+
+            quote = kite.quote(f"{exchange}:{tradingsymbol}")
+
+            if not quote:
+                return None
+
+            # Extract quote data
+            quote_key = f"{exchange}:{tradingsymbol}"
+            quote_data = quote.get(quote_key, {})
+
+            return {
+                "tradingsymbol": tradingsymbol,
+                "exchange": exchange,
+                "instrument_token": instrument_token,
+                "last_price": quote_data.get("last_price", 0),
+                "day_high": quote_data.get("ohlc", {}).get("high", 0),
+                "day_low": quote_data.get("ohlc", {}).get("low", 0),
+                "day_open": quote_data.get("ohlc", {}).get("open", 0),
+                "day_close": quote_data.get("ohlc", {}).get("close", 0),
+                "volume": quote_data.get("volume", 0),
+                "average_price": quote_data.get("average_price", 0),
+                "total_buy_quantity": quote_data.get("total_buy_quantity", 0),
+                "total_sell_quantity": quote_data.get("total_sell_quantity", 0),
+                "oi": quote_data.get("oi", 0),
+                "oi_day_high": quote_data.get("oi_day_high", 0),
+                "oi_day_low": quote_data.get("oi_day_low", 0),
+                "timestamp": quote_data.get("timestamp"),
+                "last_trade_time": quote_data.get("last_trade_time")
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching quote for {tradingsymbol}: {e}")
+            raise
+
+    def fetch_stock_quotes(self, account_id: int, tradingsymbols: List[str], exchange: str = "NSE") -> List[Dict[str, Any]]:
+        """
+        Fetch quotes for multiple stocks at once
+        Returns list of quote dicts
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            # Build instrument list
+            instruments = [f"{exchange}:{symbol}" for symbol in tradingsymbols]
+
+            # Fetch quotes
+            quotes = kite.quote(instruments)
+
+            results = []
+            for tradingsymbol in tradingsymbols:
+                quote_key = f"{exchange}:{tradingsymbol}"
+                quote_data = quotes.get(quote_key, {})
+
+                if quote_data:
+                    results.append({
+                        "tradingsymbol": tradingsymbol,
+                        "exchange": exchange,
+                        "last_price": quote_data.get("last_price", 0),
+                        "day_high": quote_data.get("ohlc", {}).get("high", 0),
+                        "day_low": quote_data.get("ohlc", {}).get("low", 0),
+                        "day_open": quote_data.get("ohlc", {}).get("open", 0),
+                        "day_close": quote_data.get("ohlc", {}).get("close", 0),
+                        "volume": quote_data.get("volume", 0),
+                        "average_price": quote_data.get("average_price", 0),
+                        "total_buy_quantity": quote_data.get("total_buy_quantity", 0),
+                        "total_sell_quantity": quote_data.get("total_sell_quantity", 0),
+                        "oi": quote_data.get("oi", 0),
+                        "oi_day_high": quote_data.get("oi_day_high", 0),
+                        "oi_day_low": quote_data.get("oi_day_low", 0),
+                        "timestamp": quote_data.get("timestamp"),
+                        "last_trade_time": quote_data.get("last_trade_time")
+                    })
+
+            logger.info(f"Fetched {len(results)} quotes for {len(tradingsymbols)} symbols")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching quotes: {e}")
+            raise
+
+    def fetch_historical_data(
+        self,
+        account_id: int,
+        tradingsymbol: str,
+        exchange: str = "NSE",
+        interval: str = "day",
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        continuous: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical candle data for a stock
+        interval: "minute", "day", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "week"
+        from_date: Start date (defaults to 30 days ago)
+        to_date: End date (defaults to today)
+        continuous: If True, fetch continuous data for futures/options
+        Returns list of OHLCV candles
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return []
+
+            # Set default dates
+            if not to_date:
+                to_date = datetime.utcnow()
+            if not from_date:
+                from_date = to_date - timedelta(days=30)
+
+            # Fetch historical data
+            data = kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=from_date,
+                to_date=to_date,
+                interval=interval,
+                continuous=continuous
+            )
+
+            # Format candles
+            candles = []
+            for candle in data:
+                candles.append({
+                    "date": candle.get("date"),
+                    "open": candle.get("open"),
+                    "high": candle.get("high"),
+                    "low": candle.get("low"),
+                    "close": candle.get("close"),
+                    "volume": candle.get("volume")
+                })
+
+            logger.info(f"Fetched {len(candles)} candles for {tradingsymbol} ({interval})")
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {tradingsymbol}: {e}")
+            raise
+
+    def fetch_intraday_data(
+        self,
+        account_id: int,
+        tradingsymbol: str,
+        exchange: str = "NSE",
+        interval: str = "minute"
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch intraday candle data for today
+        interval: "minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"
+        Returns list of OHLCV candles
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return []
+
+            # Get today's date
+            today = datetime.utcnow()
+            from_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Fetch intraday data
+            data = kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=from_date,
+                to_date=today,
+                interval=interval
+            )
+
+            # Format candles
+            candles = []
+            for candle in data:
+                candles.append({
+                    "date": candle.get("date"),
+                    "open": candle.get("open"),
+                    "high": candle.get("high"),
+                    "low": candle.get("low"),
+                    "close": candle.get("close"),
+                    "volume": candle.get("volume")
+                })
+
+            logger.info(f"Fetched {len(candles)} intraday candles for {tradingsymbol} ({interval})")
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching intraday data for {tradingsymbol}: {e}")
+            raise
+
+    def _get_instrument_token(self, account_id: int, tradingsymbol: str, exchange: str) -> Optional[str]:
+        """
+        Get instrument token for a trading symbol
+        This is a helper method that caches instrument tokens
+        """
+        # Check cache first
+        cache_key = f"{exchange}:{tradingsymbol}"
+        if hasattr(self, '_instrument_cache') and cache_key in self._instrument_cache:
+            return self._instrument_cache[cache_key]
+
+        # Initialize cache if not exists
+        if not hasattr(self, '_instrument_cache'):
+            self._instrument_cache = {}
+
+        kite = self.get_kite(account_id)
+        if not kite:
+            return None
+
+        try:
+            # Fetch instruments for the exchange
+            instruments = kite.instruments(exchange)
+
+            # Find the instrument token
+            for instrument in instruments:
+                if instrument.get("tradingsymbol") == tradingsymbol:
+                    token = instrument.get("instrument_token")
+                    self._instrument_cache[cache_key] = token
+                    return token
+
+            logger.warning(f"Instrument token not found for {tradingsymbol} on {exchange}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument token: {e}")
+            return None
+
+    def get_instruments(self, account_id: int, exchange: str = "NSE") -> List[Dict[str, Any]]:
+        """
+        Get all instruments for an exchange
+        Returns list of instrument details
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instruments = kite.instruments(exchange)
+
+            # Format instruments
+            formatted = []
+            for instrument in instruments:
+                formatted.append({
+                    "instrument_token": instrument.get("instrument_token"),
+                    "exchange_token": instrument.get("exchange_token"),
+                    "tradingsymbol": instrument.get("tradingsymbol"),
+                    "name": instrument.get("name"),
+                    "last_price": instrument.get("last_price"),
+                    "expiry": instrument.get("expiry"),
+                    "strike": instrument.get("strike"),
+                    "tick_size": instrument.get("tick_size"),
+                    "lot_size": instrument.get("lot_size"),
+                    "instrument_type": instrument.get("instrument_type"),
+                    "segment": instrument.get("segment"),
+                    "exchange": instrument.get("exchange")
+                })
+
+            logger.info(f"Fetched {len(formatted)} instruments for {exchange}")
+            return formatted
+
+        except Exception as e:
+            logger.error(f"Error fetching instruments: {e}")
+            raise

@@ -1,0 +1,744 @@
+//@version=6
+strategy("Professional Buy/Sell Signal - BTC & Gold (STRATEGY)", overlay=true, max_lines_count=500, max_labels_count=500, default_qty_type=strategy.percent_of_equity, default_qty_value=100, commission_type=strategy.commission.percent, commission_value=0.1)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INPUTS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === ACCOUNT SETTINGS ===
+lotSize = input.float(0.01, "Lot Size", minval=0.01, maxval=1.0, step=0.01)
+accountBalance = input.float(30.0, "Account Balance ($)", minval=10.0, maxval=1000.0)
+
+// === MULTI-TIMEFRAME SETTINGS ===
+useMTF = input.bool(true, "Use Multi-Timeframe Analysis")
+higherTF1 = input.timeframe("4H", "Higher Timeframe 1")
+higherTF2 = input.timeframe("D", "Higher Timeframe 2")
+
+// === MARKET STRUCTURE SETTINGS ===
+useMarketStructure = input.bool(true, "Use Market Structure")
+swingLookback = input.int(10, "Swing Lookback", minval=5, maxval=20)
+
+// === TREND SETTINGS ===
+emaFastPeriod = input.int(9, "Fast EMA Period", minval=3, maxval=50)
+emaSlowPeriod = input.int(21, "Slow EMA Period", minval=10, maxval=100)
+emaTrendPeriod = input.int(50, "Trend EMA Period", minval=20, maxval=200)
+
+// === RSI SETTINGS ===
+rsiPeriod = input.int(14, "RSI Period", minval=5, maxval=30)
+rsiOversold = input.int(30, "RSI Oversold Level", minval=10, maxval=40)
+rsiOverbought = input.int(70, "RSI Overbought Level", minval=60, maxval=90)
+useRSIDivergence = input.bool(true, "Use RSI Divergence")
+
+// === MACD SETTINGS ===
+macdFast = input.int(12, "MACD Fast", minval=5, maxval=30)
+macdSlow = input.int(26, "MACD Slow", minval=10, maxval=50)
+macdSignal = input.int(9, "MACD Signal", minval=5, maxval=20)
+useMACDDivergence = input.bool(true, "Use MACD Divergence")
+
+// === BOLLINGER BANDS SETTINGS ===
+useBB = input.bool(true, "Use Bollinger Bands")
+bbPeriod = input.int(20, "BB Period", minval=5, maxval=50)
+bbDev = input.float(2.0, "BB Deviation", minval=1.0, maxval=3.0)
+
+// === STOCHASTIC SETTINGS ===
+useStoch = input.bool(true, "Use Stochastic")
+stochK = input.int(14, "Stochastic %K", minval=5, maxval=30)
+stochD = input.int(3, "Stochastic %D", minval=1, maxval=10)
+stochOB = input.int(80, "Stochastic Overbought", minval=70, maxval=90)
+stochOS = input.int(20, "Stochastic Oversold", minval=10, maxval=30)
+
+// === ADX SETTINGS ===
+useADX = input.bool(true, "Use ADX")
+adxPeriod = input.int(14, "ADX Period", minval=5, maxval=30)
+adxThreshold = input.int(25, "ADX Trend Strength", minval=15, maxval=40)
+
+// === VOLUME SETTINGS ===
+useVolume = input.bool(true, "Use Volume Analysis")
+volumeMA = input.int(20, "Volume MA Period", minval=5, maxval=50)
+volumeMultiplier = input.float(1.5, "Volume Multiplier", minval=1.0, maxval=3.0)
+
+// === SUPPORT/RESISTANCE SETTINGS ===
+useSR = input.bool(true, "Use Support/Resistance")
+srLookback = input.int(20, "SR Lookback", minval=5, maxval=50)
+srStrength = input.int(2, "SR Touches Required", minval=1, maxval=5)
+
+// === PIVOT POINTS SETTINGS ===
+usePivots = input.bool(true, "Use Pivot Points")
+pivotTimeframe = input.timeframe("D", "Pivot Timeframe")
+
+// === FIBONACCI SETTINGS ===
+useFib = input.bool(true, "Use Fibonacci Levels")
+fibLookback = input.int(50, "Fibonacci Lookback", minval=20, maxval=100)
+
+// === LIQUIDITY ZONES SETTINGS ===
+useLiquidity = input.bool(true, "Use Liquidity Zones")
+liquidityLookback = input.int(20, "Liquidity Lookback", minval=10, maxval=50)
+
+// === SESSION FILTERS ===
+useSessionFilter = input.bool(true, "Use Session Filter")
+asianStart = input.int(0, "Asian Session Start (Hour)", minval=0, maxval=23)
+asianEnd = input.int(8, "Asian Session End (Hour)", minval=0, maxval=23)
+londonStart = input.int(8, "London Session Start (Hour)", minval=0, maxval=23)
+londonEnd = input.int(12, "London Session End (Hour)", minval=0, maxval=23)
+nyStart = input.int(13, "NY Session Start (Hour)", minval=0, maxval=23)
+nyEnd = input.int(21, "NY Session End (Hour)", minval=0, maxval=23)
+
+// === VOLATILITY FILTERS ===
+useVolatilityFilter = input.bool(true, "Use Volatility Filter")
+atrPeriod = input.int(14, "ATR Period", minval=5, maxval=30)
+minATR = input.float(0.001, "Minimum ATR", minval=0.0001, maxval=0.01)
+
+// === CORRELATION SETTINGS ===
+useCorrelation = input.bool(true, "Use Correlation Analysis")
+btcSymbol = input.symbol("BINANCE:BTCUSDT", "BTC Symbol")
+goldSymbol = input.symbol("TVC:GOLD", "Gold Symbol")
+dxySymbol = input.symbol("TVC:DXY", "DXY Symbol")
+correlationPeriod = input.int(20, "Correlation Period", minval=5, maxval=50)
+
+// === RISK MANAGEMENT SETTINGS ===
+showEntryExit = input.bool(true, "Show Entry/Exit Levels")
+riskPercent = input.float(0.5, "Risk %", minval=0.3, maxval=2.0) / 100
+rewardRiskRatio = input.float(2.0, "Reward:Risk Ratio", minval=1.5, maxval=3.0)
+useTrailingStop = input.bool(true, "Use Trailing Stop")
+trailPercent = input.float(0.3, "Trail %", minval=0.1, maxval=1.0) / 100
+usePartialTP = input.bool(true, "Use Partial Take Profit")
+partialTP1Percent = input.float(0.8, "TP1 %", minval=0.5, maxval=2.0) / 100
+partialTP2Percent = input.float(1.5, "TP2 %", minval=1.0, maxval=3.0) / 100
+useBreakeven = input.bool(true, "Use Breakeven")
+breakevenPercent = input.float(0.5, "Breakeven at %", minval=0.2, maxval=1.0) / 100
+
+// === SIGNAL QUALITY SETTINGS ===
+minSignalScore = input.int(16, "Minimum Signal Score", minval=10, maxval=30)
+useQualityFilter = input.bool(true, "Use Quality Filter")
+
+// === AI/ML SETTINGS ===
+useAIProbability = input.bool(true, "Use AI Probability Scoring")
+winRateLookback = input.int(50, "Win Rate Lookback", minval=20, maxval=100)
+minWinRate = input.float(60.0, "Min Win Rate %", minval=50.0, maxval=80.0)
+
+// === DISPLAY SETTINGS ===
+showDashboard = input.bool(true, "Show Dashboard")
+showBB = input.bool(false, "Show Bollinger Bands")
+showPivots = input.bool(false, "Show Pivot Lines")
+showFib = input.bool(false, "Show Fibonacci Lines")
+showLiquidity = input.bool(false, "Show Liquidity Zones")
+showSR = input.bool(false, "Show Support/Resistance Lines")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// INDICATORS CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// === MULTI-TIMEFRAME TREND ===
+mtfTrendUp1 = false
+mtfTrendDown1 = false
+mtfTrendUp2 = false
+mtfTrendDown2 = false
+
+if useMTF
+    mtfEmaFast1 = request.security(syminfo.tickerid, higherTF1, ta.ema(close, emaFastPeriod))
+    mtfEmaSlow1 = request.security(syminfo.tickerid, higherTF1, ta.ema(close, emaSlowPeriod))
+    mtfTrendUp1 := mtfEmaFast1 > mtfEmaSlow1
+    mtfTrendDown1 := mtfEmaFast1 < mtfEmaSlow1
+
+    mtfEmaFast2 = request.security(syminfo.tickerid, higherTF2, ta.ema(close, emaFastPeriod))
+    mtfEmaSlow2 = request.security(syminfo.tickerid, higherTF2, ta.ema(close, emaSlowPeriod))
+    mtfTrendUp2 := mtfEmaFast2 > mtfEmaSlow2
+    mtfTrendDown2 := mtfEmaFast2 < mtfEmaSlow2
+
+// === MARKET STRUCTURE ===
+var float swingHigh = na
+var float swingLow = na
+var int swingHighBar = 0
+var int swingLowBar = 0
+
+// Find swing highs
+swingHighCandidate = ta.highest(high, swingLookback)
+if high == swingHighCandidate and high != high[1]
+    swingHigh := high
+    swingHighBar := bar_index
+
+// Find swing lows
+swingLowCandidate = ta.lowest(low, swingLookback)
+if low == swingLowCandidate and low != low[1]
+    swingLow := low
+    swingLowBar := bar_index
+
+// Market structure analysis
+higherHigh = not na(swingHigh) and swingHigh > swingHigh[1]
+higherLow = not na(swingLow) and swingLow > swingLow[1]
+lowerHigh = not na(swingHigh) and swingHigh < swingHigh[1]
+lowerLow = not na(swingLow) and swingLow < swingLow[1]
+
+bullishStructure = higherHigh and higherLow
+bearishStructure = lowerHigh and lowerLow
+
+// Structure break
+structureBreakUp = close > swingHigh and not na(swingHigh)
+structureBreakDown = close < swingLow and not na(swingLow)
+
+// === CURRENT TIMEFRAME TREND ===
+emaFast = ta.ema(close, emaFastPeriod)
+emaSlow = ta.ema(close, emaSlowPeriod)
+emaTrend = ta.ema(close, emaTrendPeriod)
+
+trendUp = emaFast > emaSlow and close > emaTrend
+trendDown = emaFast < emaSlow and close < emaTrend
+trendNeutral = not trendUp and not trendDown
+
+emaCrossUp = ta.crossover(emaFast, emaSlow)
+emaCrossDown = ta.crossunder(emaFast, emaSlow)
+
+// === RSI ANALYSIS ===
+rsiValue = ta.rsi(close, rsiPeriod)
+rsiOversoldSignal = rsiValue < rsiOversold
+rsiOverboughtSignal = rsiValue > rsiOverbought
+rsiBullish = rsiValue > 50 and rsiValue < rsiOverbought
+rsiBearish = rsiValue < 50 and rsiValue > rsiOversold
+
+// RSI Divergence
+rsiBullishDiv = useRSIDivergence and low < low[4] and rsiValue > rsiValue[4]
+rsiBearishDiv = useRSIDivergence and high > high[4] and rsiValue < rsiValue[4]
+
+// === MACD ANALYSIS ===
+[macdLine, signalLine, macdHist] = ta.macd(close, macdFast, macdSlow, macdSignal)
+macdBullish = macdLine > signalLine
+macdBearish = macdLine < signalLine
+macdCrossUp = ta.crossover(macdLine, signalLine)
+macdCrossDown = ta.crossunder(macdLine, signalLine)
+
+// MACD Divergence
+macdBullishDiv = useMACDDivergence and low < low[4] and macdLine > macdLine[4]
+macdBearishDiv = useMACDDivergence and high > high[4] and macdLine < macdLine[4]
+
+// === BOLLINGER BANDS ===
+[bbMiddle, bbUpper, bbLower] = ta.bb(close, bbPeriod, bbDev)
+bbWidth = (bbUpper - bbLower) / bbMiddle
+bbSqueeze = bbWidth < ta.sma(bbWidth, 50) * 0.8
+nearBBLower = close <= bbLower * 1.005
+nearBBUpper = close >= bbUpper * 0.995
+
+// === STOCHASTIC ===
+stochKValue = ta.sma(ta.stoch(close, high, low, stochK), stochD)
+stochOversold = stochKValue < stochOS
+stochOverbought = stochKValue > stochOB
+stochCrossUp = ta.crossover(stochKValue, stochOS)
+stochCrossDown = ta.crossunder(stochKValue, stochOB)
+
+// === ADX ===
+[diPlus, diMinus, adxValue] = ta.dmi(adxPeriod, adxPeriod)
+adxStrongTrend = adxValue > adxThreshold
+adxWeakTrend = adxValue < adxThreshold
+adxUpTrend = diPlus > diMinus
+adxDownTrend = diMinus > diPlus
+
+// === VOLUME ANALYSIS ===
+volMA = ta.sma(volume, volumeMA)
+highVolume = volume > volMA * volumeMultiplier
+volumeConfirmUp = close > close[1] and highVolume
+volumeConfirmDown = close < close[1] and highVolume
+
+// === SUPPORT/RESISTANCE ===
+var float supportLevel = na
+var float resistanceLevel = na
+var int supportTouches = 0
+var int resistanceTouches = 0
+
+highestHigh = ta.highest(high, srLookback)
+lowestLow = ta.lowest(low, srLookback)
+
+if low <= lowestLow * 1.001 and low >= lowestLow * 0.999
+    if na(supportLevel) or math.abs(low - supportLevel) / supportLevel > 0.01
+        supportLevel := low
+        supportTouches := 1
+    else
+        supportTouches := supportTouches + 1
+
+if high >= highestHigh * 0.999 and high <= highestHigh * 1.001
+    if na(resistanceLevel) or math.abs(high - resistanceLevel) / resistanceLevel > 0.01
+        resistanceLevel := high
+        resistanceTouches := 1
+    else
+        resistanceTouches := resistanceTouches + 1
+
+nearSupport = close <= supportLevel * 1.005 and close >= supportLevel * 0.995
+nearResistance = close >= resistanceLevel * 0.995 and close <= resistanceLevel * 1.005
+
+// === PIVOT POINTS ===
+var float pivotHigh = na
+var float pivotLow = na
+var float pivotR1 = na
+var float pivotS1 = na
+var float pivotR2 = na
+var float pivotS2 = na
+
+if usePivots
+    prevHigh = request.security(syminfo.tickerid, pivotTimeframe, high[1])
+    prevLow = request.security(syminfo.tickerid, pivotTimeframe, low[1])
+    prevClose = request.security(syminfo.tickerid, pivotTimeframe, close[1])
+
+    pivotHigh := (prevHigh + prevLow + prevClose) / 3
+    pivotLow := (prevHigh + prevLow) / 2
+    pivotR1 := (2 * pivotHigh) - prevLow
+    pivotS1 := (2 * pivotHigh) - prevHigh
+    pivotR2 := pivotHigh + (prevHigh - prevLow)
+    pivotS2 := pivotLow - (prevHigh - prevLow)
+
+nearPivotSupport = close <= pivotS1 * 1.005 and close >= pivotS1 * 0.995
+nearPivotResistance = close >= pivotR1 * 0.995 and close <= pivotR1 * 1.005
+
+// === FIBONACCI LEVELS ===
+var float fibHigh = na
+var float fibLow = na
+var float fibRange = na
+var float fib0 = na
+var float fib236 = na
+var float fib382 = na
+var float fib500 = na
+var float fib618 = na
+var float fib786 = na
+var float fib1000 = na
+
+if useFib
+    fibHigh := ta.highest(high, fibLookback)
+    fibLow := ta.lowest(low, fibLookback)
+    fibRange := fibHigh - fibLow
+
+    fib0 := fibHigh
+    fib236 := fibHigh - (fibRange * 0.236)
+    fib382 := fibHigh - (fibRange * 0.382)
+    fib500 := fibHigh - (fibRange * 0.5)
+    fib618 := fibHigh - (fibRange * 0.618)
+    fib786 := fibHigh - (fibRange * 0.786)
+    fib1000 := fibLow
+
+nearFib382 = useFib and close <= fib382 * 1.005 and close >= fib382 * 0.995
+nearFib618 = useFib and close >= fib618 * 0.995 and close <= fib618 * 1.005
+
+// === LIQUIDITY ZONES ===
+var float orderBlockHigh = na
+var float orderBlockLow = na
+var float fvgHigh = na
+var float fvgLow = na
+
+if useLiquidity
+    // Order Block (last bearish candle before bullish move)
+    if close[1] < open[1] and close > open and close > close[1]
+        orderBlockHigh := high[1]
+        orderBlockLow := low[1]
+
+    // Fair Value Gap
+    if low[2] > high[0]
+        fvgHigh := low[2]
+        fvgLow := high[0]
+
+nearOrderBlock = close <= orderBlockHigh * 1.005 and close >= orderBlockLow * 0.995
+nearFVG = close <= fvgHigh * 1.005 and close >= fvgLow * 0.995
+
+// === SESSION FILTERS ===
+currentHour = hour(time)
+asianSession = useSessionFilter and currentHour >= asianStart and currentHour < asianEnd
+londonSession = useSessionFilter and currentHour >= londonStart and currentHour < londonEnd
+nySession = useSessionFilter and currentHour >= nyStart and currentHour < nyEnd
+activeSession = asianSession or londonSession or nySession
+
+// === VOLATILITY FILTER ===
+atrValue = ta.atr(atrPeriod)
+atrMA = ta.sma(atrValue, 20)
+volatilityHigh = atrValue > atrMA * 1.2
+volatilityLow = atrValue < atrMA * 0.8
+volatilityOK = atrValue >= minATR
+
+// === CORRELATION ANALYSIS ===
+var float btcGoldCorrelation = 0.0
+var float btcDxyCorrelation = 0.0
+var string marketSentiment = "NEUTRAL"
+var float btcClose = na
+var float goldClose = na
+var float dxyClose = na
+
+if useCorrelation
+    // Fetch external data
+    btcClose := request.security(btcSymbol, timeframe.period, close)
+    goldClose := request.security(goldSymbol, timeframe.period, close)
+    dxyClose := request.security(dxySymbol, timeframe.period, close)
+
+    // Calculate correlation (simplified using price relationship)
+    btcGoldRatio = not na(btcClose) and not na(goldClose) and goldClose != 0 ? btcClose / goldClose : na
+    btcGoldCorrelation := ta.sma(btcGoldRatio, correlationPeriod)
+
+    // DXY inverse correlation
+    btcDxyRatio = not na(btcClose) and not na(dxyClose) and dxyClose != 0 ? btcClose / dxyClose : na
+    btcDxyCorrelation := ta.sma(btcDxyRatio, correlationPeriod)
+
+    // Market sentiment based on correlations
+    if not na(btcGoldCorrelation) and not na(btcGoldCorrelation[1]) and not na(btcDxyCorrelation) and not na(btcDxyCorrelation[1])
+        if btcGoldCorrelation > btcGoldCorrelation[1] and btcDxyCorrelation < btcDxyCorrelation[1]
+            marketSentiment := "BULLISH"
+        else if btcGoldCorrelation < btcGoldCorrelation[1] and btcDxyCorrelation > btcDxyCorrelation[1]
+            marketSentiment := "BEARISH"
+        else
+            marketSentiment := "NEUTRAL"
+
+// Correlation alignment for signals
+btcGoldBullishAlign = useCorrelation and marketSentiment == "BULLISH"
+btcGoldBearishAlign = useCorrelation and marketSentiment == "BEARISH"
+dxBullishAlign = useCorrelation and not na(dxyClose) and not na(dxyClose[1]) and dxyClose < dxyClose[1]
+dxBearishAlign = useCorrelation and not na(dxyClose) and not na(dxyClose[1]) and dxyClose > dxyClose[1]
+
+// === MARKET CONDITION ===
+priceRange = (ta.highest(high, 20) - ta.lowest(low, 20)) / close
+rangingMarket = priceRange < 0.02 and not volatilityHigh
+trendingMarket = not rangingMarket
+
+// === CANDLE PATTERNS ===
+bullishEngulfing = close[1] < open[1] and close > open and close > open[1] and open < close[1]
+bearishEngulfing = close[1] > open[1] and close < open and close < open[1] and open > close[1]
+hammer = (math.abs(close - open) < (high - low) * 0.3) and (low < open - (high - low) * 0.6) and close > open
+shootingStar = (math.abs(close - open) < (high - low) * 0.3) and (high > open + (high - low) * 0.6) and close < open
+doji = math.abs(close - open) < (high - low) * 0.1
+morningStar = close[2] < open[2] and math.abs(close[1] - open[1]) < (high[1] - low[1]) * 0.1 and close > open and close > (open[2] + close[2]) / 2
+eveningStar = close[2] > open[2] and math.abs(close[1] - open[1]) < (high[1] - low[1]) * 0.1 and close < open and close < (open[2] + close[2]) / 2
+threeWhiteSoldiers = close > open and close[1] > open[1] and close[2] > open[2] and close > close[1] and close[1] > close[2]
+threeBlackCrows = close < open and close[1] < open[1] and close[2] < open[2] and close < close[1] and close[1] < close[2]
+piercingLine = close[1] < open[1] and close > open and close < open[1] and open < close[1] and (close - open) > (open[1] - close[1]) * 0.5
+darkCloudCover = close[1] > open[1] and close < open and close > open[1] and open > close[1] and (open - close) > (close[1] - open[1]) * 0.5
+bullishMarubozu = close > open and math.abs(close - open) > (high - low) * 0.9
+bearishMarubozu = close < open and math.abs(close - open) > (high - low) * 0.9
+
+// Pattern recognition (simplified)
+patternBullish = (bullishEngulfing or morningStar or threeWhiteSoldiers or piercingLine or bullishMarubozu)
+patternBearish = (bearishEngulfing or eveningStar or threeBlackCrows or darkCloudCover or bearishMarubozu)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SIGNAL CALCULATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Calculate buy score (fresh each bar)
+buyScore = 0
+
+// Multi-timeframe alignment (weighted)
+buyScore := buyScore + (useMTF and mtfTrendUp1 ? 4 : 0)
+buyScore := buyScore + (useMTF and mtfTrendUp2 ? 3 : 0)
+
+// Market structure
+buyScore := buyScore + (useMarketStructure and bullishStructure ? 3 : 0)
+buyScore := buyScore + (useMarketStructure and structureBreakUp ? 2 : 0)
+
+// Trend analysis
+buyScore := buyScore + (trendUp ? 2 : (trendNeutral ? 0 : -1))
+buyScore := buyScore + (emaCrossUp ? 3 : 0)
+
+// RSI analysis
+buyScore := buyScore + (rsiOversoldSignal ? 2 : (rsiBullish ? 1 : 0))
+buyScore := buyScore + (rsiBullishDiv ? 3 : 0)
+
+// MACD analysis
+buyScore := buyScore + (macdCrossUp ? 2 : (macdBullish ? 1 : 0))
+buyScore := buyScore + (macdBullishDiv ? 2 : 0)
+
+// Bollinger Bands
+buyScore := buyScore + (useBB and nearBBLower ? 2 : 0)
+buyScore := buyScore + (useBB and bbSqueeze and trendUp ? 1 : 0)
+
+// Stochastic
+buyScore := buyScore + (useStoch and stochOversold ? 2 : 0)
+buyScore := buyScore + (useStoch and stochCrossUp ? 2 : 0)
+
+// ADX
+buyScore := buyScore + (useADX and adxStrongTrend and adxUpTrend ? 2 : 0)
+
+// Volume
+buyScore := buyScore + (useVolume and volumeConfirmUp ? 1 : 0)
+
+// Support/Resistance
+buyScore := buyScore + (useSR and nearSupport and supportTouches >= srStrength ? 2 : 0)
+buyScore := buyScore + (usePivots and nearPivotSupport ? 1 : 0)
+
+// Fibonacci
+buyScore := buyScore + (useFib and nearFib382 ? 2 : 0)
+
+// Liquidity zones
+buyScore := buyScore + (useLiquidity and nearOrderBlock ? 2 : 0)
+buyScore := buyScore + (useLiquidity and nearFVG ? 1 : 0)
+
+// Session filter
+buyScore := buyScore + (useSessionFilter and activeSession ? 1 : 0)
+
+// Volatility filter
+buyScore := buyScore + (useVolatilityFilter and volatilityOK ? 1 : 0)
+
+// Candle patterns
+buyScore := buyScore + ((bullishEngulfing or hammer) ? 2 : 0)
+buyScore := buyScore + (morningStar ? 3 : 0)
+buyScore := buyScore + (threeWhiteSoldiers ? 2 : 0)
+buyScore := buyScore + (piercingLine ? 2 : 0)
+buyScore := buyScore + (bullishMarubozu ? 2 : 0)
+
+// Correlation alignment
+buyScore := buyScore + (useCorrelation and btcGoldBullishAlign ? 2 : 0)
+buyScore := buyScore + (useCorrelation and dxBearishAlign ? 1 : 0)
+
+// Pattern recognition bonus
+buyScore := buyScore + (patternBullish ? 1 : 0)
+
+// Market condition filter
+if useQualityFilter and rangingMarket
+    buyScore := buyScore - 3
+
+// Calculate sell score (fresh each bar)
+sellScore = 0
+
+// Multi-timeframe alignment (weighted)
+sellScore := sellScore + (useMTF and mtfTrendDown1 ? 4 : 0)
+sellScore := sellScore + (useMTF and mtfTrendDown2 ? 3 : 0)
+
+// Market structure
+sellScore := sellScore + (useMarketStructure and bearishStructure ? 3 : 0)
+sellScore := sellScore + (useMarketStructure and structureBreakDown ? 2 : 0)
+
+// Trend analysis
+sellScore := sellScore + (trendDown ? 2 : (trendNeutral ? 0 : -1))
+sellScore := sellScore + (emaCrossDown ? 3 : 0)
+
+// RSI analysis
+sellScore := sellScore + (rsiOverboughtSignal ? 2 : (rsiBearish ? 1 : 0))
+sellScore := sellScore + (rsiBearishDiv ? 3 : 0)
+
+// MACD analysis
+sellScore := sellScore + (macdCrossDown ? 2 : (macdBearish ? 1 : 0))
+sellScore := sellScore + (macdBearishDiv ? 2 : 0)
+
+// Bollinger Bands
+sellScore := sellScore + (useBB and nearBBUpper ? 2 : 0)
+sellScore := sellScore + (useBB and bbSqueeze and trendDown ? 1 : 0)
+
+// Stochastic
+sellScore := sellScore + (useStoch and stochOverbought ? 2 : 0)
+sellScore := sellScore + (useStoch and stochCrossDown ? 2 : 0)
+
+// ADX
+sellScore := sellScore + (useADX and adxStrongTrend and adxDownTrend ? 2 : 0)
+
+// Volume
+sellScore := sellScore + (useVolume and volumeConfirmDown ? 1 : 0)
+
+// Support/Resistance
+sellScore := sellScore + (useSR and nearResistance and resistanceTouches >= srStrength ? 2 : 0)
+sellScore := sellScore + (usePivots and nearPivotResistance ? 1 : 0)
+
+// Fibonacci
+sellScore := sellScore + (useFib and nearFib618 ? 2 : 0)
+
+// Liquidity zones
+sellScore := sellScore + (useLiquidity and nearOrderBlock ? 2 : 0)
+sellScore := sellScore + (useLiquidity and nearFVG ? 1 : 0)
+
+// Session filter
+sellScore := sellScore + (useSessionFilter and activeSession ? 1 : 0)
+
+// Volatility filter
+sellScore := sellScore + (useVolatilityFilter and volatilityOK ? 1 : 0)
+
+// Candle patterns
+sellScore := sellScore + ((bearishEngulfing or shootingStar) ? 2 : 0)
+sellScore := sellScore + (eveningStar ? 3 : 0)
+sellScore := sellScore + (threeBlackCrows ? 2 : 0)
+sellScore := sellScore + (darkCloudCover ? 2 : 0)
+sellScore := sellScore + (bearishMarubozu ? 2 : 0)
+
+// Correlation alignment
+sellScore := sellScore + (useCorrelation and btcGoldBearishAlign ? 2 : 0)
+sellScore := sellScore + (useCorrelation and dxBullishAlign ? 1 : 0)
+
+// Pattern recognition bonus
+sellScore := sellScore + (patternBearish ? 1 : 0)
+
+// Market condition filter
+if useQualityFilter and rangingMarket
+    sellScore := sellScore - 3
+
+// Final signals
+strongBuy = buyScore >= minSignalScore
+strongSell = sellScore >= minSignalScore
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// STRATEGY LOGIC
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Calculate SL/TP based on ATR
+atrSL = atrValue * 2
+tpDistance = atrSL * rewardRiskRatio
+
+// Entry conditions
+longCondition = strongBuy and strategy.position_size == 0
+shortCondition = strongSell and strategy.position_size == 0
+
+// Exit conditions
+longExit = strongSell or (rsiOverboughtSignal and macdBearish)
+shortExit = strongBuy or (rsiOversoldSignal and macdBullish)
+
+// Execute trades
+if longCondition
+    strategy.entry("Long", strategy.long, stop=close - atrSL, limit=close + tpDistance)
+
+if shortCondition
+    strategy.entry("Short", strategy.short, stop=close + atrSL, limit=close - tpDistance)
+
+// Exit conditions
+if longExit and strategy.position_size > 0
+    strategy.close("Long")
+
+if shortExit and strategy.position_size < 0
+    strategy.close("Short")
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PLOTTING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Bollinger Bands
+plot(showBB ? bbUpper : na, color=color.new(color.blue, 50), linewidth=1, title="BB Upper")
+plot(showBB ? bbMiddle : na, color=color.new(color.orange, 50), linewidth=1, title="BB Middle")
+plot(showBB ? bbLower : na, color=color.new(color.blue, 50), linewidth=1, title="BB Lower")
+
+// Pivot Points
+plot(showPivots ? pivotR1 : na, color=color.new(color.red, 70), linewidth=1, style=plot.style_linebr, title="Pivot R1")
+plot(showPivots ? pivotS1 : na, color=color.new(color.green, 70), linewidth=1, style=plot.style_linebr, title="Pivot S1")
+
+// Fibonacci
+plot(showFib ? fib382 : na, color=color.new(color.purple, 70), linewidth=1, style=plot.style_linebr, title="Fib 38.2%")
+plot(showFib ? fib500 : na, color=color.new(color.yellow, 70), linewidth=1, style=plot.style_linebr, title="Fib 50%")
+plot(showFib ? fib618 : na, color=color.new(color.purple, 70), linewidth=1, style=plot.style_linebr, title="Fib 61.8%")
+
+// Liquidity Zones
+plot(showLiquidity ? orderBlockHigh : na, color=color.new(color.lime, 80), linewidth=1, style=plot.style_linebr, title="Order Block")
+plot(showLiquidity ? fvgHigh : na, color=color.new(color.fuchsia, 80), linewidth=1, style=plot.style_linebr, title="FVG")
+
+// Support/Resistance
+plot(showSR and useSR ? supportLevel : na, color=color.new(color.green, 0), linewidth=1, style=plot.style_linebr, title="Support")
+plot(showSR and useSR ? resistanceLevel : na, color=color.new(color.red, 0), linewidth=1, style=plot.style_linebr, title="Resistance")
+
+// Show buy score as green number below bar
+if strongBuy
+    labelText = str.tostring(buyScore)
+    label.new(bar_index, low, text=labelText, color=color.new(color.green, 70), textcolor=color.white, style=label.style_label_up, size=size.normal)
+
+// Show sell score as red number above bar
+if strongSell
+    labelText = str.tostring(sellScore)
+    label.new(bar_index, high, text=labelText, color=color.new(color.red, 70), textcolor=color.white, style=label.style_label_down, size=size.normal)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DASHBOARD
+// ═══════════════════════════════════════════════════════════════════════════════
+
+if showDashboard and barstate.islast
+    var table dashboard = table.new(position.top_right, 2, 20, bgcolor=color.new(color.black, 85), border_width=1)
+
+    // Header
+    table.cell(dashboard, 0, 0, "📊 STRATEGY TEST", text_color=color.white, text_size=size.normal, bgcolor=color.new(color.blue, 70))
+
+    // Current Signal
+    currentSignal = strongBuy ? "🟢 BUY " + str.tostring(buyScore) : strongSell ? "🔴 SELL " + str.tostring(sellScore) : "⚪ NEUTRAL"
+    signalColor = strongBuy ? color.green : strongSell ? color.red : color.gray
+    table.cell(dashboard, 0, 1, "Signal:", text_color=color.white)
+    table.cell(dashboard, 1, 1, currentSignal, text_color=signalColor, text_size=size.normal)
+
+    // Market Condition
+    marketText = trendingMarket ? "📈 TRENDING" : "↔️ RANGING"
+    marketColor = trendingMarket ? color.green : color.orange
+    table.cell(dashboard, 0, 2, "Market:", text_color=color.white)
+    table.cell(dashboard, 1, 2, marketText, text_color=marketColor)
+
+    // MTF Trend
+    mtfText = useMTF ? (mtfTrendUp1 and mtfTrendUp2 ? "🟢 STRONG BULL" : mtfTrendDown1 and mtfTrendDown2 ? "🔴 STRONG BEAR" : "⚪ MIXED") : "N/A"
+    mtfColor = mtfTrendUp1 and mtfTrendUp2 ? color.green : mtfTrendDown1 and mtfTrendDown2 ? color.red : color.gray
+    table.cell(dashboard, 0, 3, "MTF Trend:", text_color=color.white)
+    table.cell(dashboard, 1, 3, mtfText, text_color=mtfColor)
+
+    // Market Structure
+    structText = bullishStructure ? "🟢 HH/HL" : bearishStructure ? "🔴 LH/LL" : "⚪ NEUTRAL"
+    structColor = bullishStructure ? color.green : bearishStructure ? color.red : color.gray
+    table.cell(dashboard, 0, 4, "Structure:", text_color=color.white)
+    table.cell(dashboard, 1, 4, structText, text_color=structColor)
+
+    // Trend
+    trendText = trendUp ? "📈 BULLISH" : trendDown ? "📉 BEARISH" : "➡️ NEUTRAL"
+    trendColor = trendUp ? color.green : trendDown ? color.red : color.gray
+    table.cell(dashboard, 0, 5, "Trend:", text_color=color.white)
+    table.cell(dashboard, 1, 5, trendText, text_color=trendColor)
+
+    // RSI
+    rsiColor = rsiOversoldSignal ? color.green : rsiOverboughtSignal ? color.red : color.white
+    table.cell(dashboard, 0, 6, "RSI:", text_color=color.white)
+    table.cell(dashboard, 1, 6, str.tostring(rsiValue, "#.#"), text_color=rsiColor)
+
+    // MACD
+    macdText = macdBullish ? "BULLISH" : "BEARISH"
+    macdColor = macdBullish ? color.green : color.red
+    table.cell(dashboard, 0, 7, "MACD:", text_color=color.white)
+    table.cell(dashboard, 1, 7, macdText, text_color=macdColor)
+
+    // Stochastic
+    stochColor = stochOversold ? color.green : stochOverbought ? color.red : color.white
+    table.cell(dashboard, 0, 8, "Stoch:", text_color=color.white)
+    table.cell(dashboard, 1, 8, str.tostring(stochKValue, "#.#"), text_color=stochColor)
+
+    // ADX
+    adxColor = adxStrongTrend ? color.green : color.orange
+    table.cell(dashboard, 0, 9, "ADX:", text_color=color.white)
+    table.cell(dashboard, 1, 9, str.tostring(adxValue, "#.#"), text_color=adxColor)
+
+    // Volume
+    volText = useVolume ? (highVolume ? "🔥 HIGH" : "📊 NORMAL") : "N/A"
+    volColor = highVolume ? color.orange : color.white
+    table.cell(dashboard, 0, 10, "Volume:", text_color=color.white)
+    table.cell(dashboard, 1, 10, volText, text_color=volColor)
+
+    // BB Position
+    bbText = nearBBLower ? "🟢 LOWER" : nearBBUpper ? "🔴 UPPER" : "⚪ MIDDLE"
+    bbColor = nearBBLower ? color.green : nearBBUpper ? color.red : color.white
+    table.cell(dashboard, 0, 11, "BB Pos:", text_color=color.white)
+    table.cell(dashboard, 1, 11, bbText, text_color=bbColor)
+
+    // Session
+    sessionText = asianSession ? "🌏 ASIAN" : londonSession ? "🇬🇧 LONDON" : nySession ? "🇺🇸 NY" : "⚪ OFF"
+    sessionColor = asianSession ? color.purple : londonSession ? color.blue : nySession ? color.green : color.gray
+    table.cell(dashboard, 0, 12, "Session:", text_color=color.white)
+    table.cell(dashboard, 1, 12, sessionText, text_color=sessionColor)
+
+    // Volatility
+    volAText = volatilityHigh ? "🔥 HIGH" : volatilityLow ? "❄️ LOW" : "📊 NORMAL"
+    volAColor = volatilityHigh ? color.orange : volatilityLow ? color.blue : color.white
+    table.cell(dashboard, 0, 13, "Volatility:", text_color=color.white)
+    table.cell(dashboard, 1, 13, volAText, text_color=volAColor)
+
+    // Buy Score
+    buyScoreColor = buyScore >= minSignalScore ? color.green : buyScore >= 12 ? color.lime : buyScore >= 8 ? color.yellow : color.gray
+    table.cell(dashboard, 0, 14, "Buy Score:", text_color=color.white)
+    table.cell(dashboard, 1, 14, str.tostring(buyScore) + "/30", text_color=buyScoreColor)
+
+    // Sell Score
+    sellScoreColor = sellScore >= minSignalScore ? color.red : sellScore >= 12 ? color.orange : sellScore >= 8 ? color.yellow : color.gray
+    table.cell(dashboard, 0, 15, "Sell Score:", text_color=color.white)
+    table.cell(dashboard, 1, 15, str.tostring(sellScore) + "/30", text_color=sellScoreColor)
+
+    // Correlation
+    if useCorrelation
+        table.cell(dashboard, 0, 16, "Correlation:", text_color=color.white)
+        table.cell(dashboard, 1, 16, marketSentiment, text_color=marketSentiment == "BULLISH" ? color.green : marketSentiment == "BEARISH" ? color.red : color.gray)
+
+    // Divergence
+    divText = (rsiBullishDiv or macdBullishDiv) ? "🟢 BULL DIV" : (rsiBearishDiv or macdBearishDiv) ? "🔴 BEAR DIV" : "None"
+    divColor = (rsiBullishDiv or macdBullishDiv) ? color.green : (rsiBearishDiv or macdBearishDiv) ? color.red : color.gray
+    table.cell(dashboard, 0, 17, "Divergence:", text_color=color.white)
+    table.cell(dashboard, 1, 17, divText, text_color=divColor)
+
+    // Price
+    table.cell(dashboard, 0, 18, "Price:", text_color=color.white)
+    table.cell(dashboard, 1, 18, str.tostring(close, "#.####"), text_color=color.white)
+
+    // Position
+    tradeText = strategy.position_size > 0 ? "🟢 LONG" : strategy.position_size < 0 ? "🔴 SHORT" : "NONE"
+    tradeColor = strategy.position_size > 0 ? color.green : strategy.position_size < 0 ? color.red : color.gray
+    table.cell(dashboard, 0, 19, "Position:", text_color=color.white)
+    table.cell(dashboard, 1, 19, tradeText, text_color=tradeColor)
