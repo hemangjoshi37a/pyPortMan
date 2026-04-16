@@ -504,6 +504,370 @@ class KiteManager:
             logger.error(f"Error cancelling order: {e}")
             raise
 
+    def modify_order(self, account_id: int, order_id: str, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Modify an existing order on Zerodha
+        params: {
+            "price": 2050,  # New price (for LIMIT orders)
+            "quantity": 15,  # New quantity
+            "order_type": "LIMIT",  # New order type
+            "validity": "DAY"  # New validity
+        }
+        Returns order response from Zerodha
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            order_id = kite.modify_order(
+                order_id=order_id,
+                variety="regular",
+                price=params.get("price"),
+                quantity=params.get("quantity"),
+                order_type=params.get("order_type"),
+                validity=params.get("validity")
+            )
+
+            logger.info(f"Order modified: {order_id}")
+            return {"order_id": order_id, "status": "MODIFIED"}
+
+        except Exception as e:
+            logger.error(f"Error modifying order: {e}")
+            raise
+
+    def get_order_details(self, account_id: int, order_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed information about a specific order
+        Returns order details from Zerodha
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            orders = kite.orders()
+            order_details = next((o for o in orders if o.get("order_id") == order_id), None)
+
+            if not order_details:
+                raise ValueError(f"Order {order_id} not found")
+
+            return {
+                "order_id": order_details.get("order_id"),
+                "stock": order_details.get("tradingsymbol"),
+                "exchange": order_details.get("exchange"),
+                "quantity": order_details.get("quantity"),
+                "price": order_details.get("average_price"),
+                "order_type": order_details.get("order_type"),
+                "transaction_type": order_details.get("transaction_type"),
+                "status": order_details.get("status"),
+                "product": order_details.get("product"),
+                "validity": order_details.get("validity"),
+                "variety": order_details.get("variety"),
+                "placed_at": datetime.fromtimestamp(order_details.get("order_timestamp", 0)).isoformat(),
+                "updated_at": datetime.fromtimestamp(order_details.get("exchange_update_timestamp", 0)).isoformat(),
+                "filled_quantity": order_details.get("filled_quantity", 0),
+                "pending_quantity": order_details.get("pending_quantity", 0),
+                "cancelled_quantity": order_details.get("cancelled_quantity", 0),
+                "average_price": order_details.get("average_price", 0),
+                "trigger_price": order_details.get("trigger_price", 0),
+                "disclosed_quantity": order_details.get("disclosed_quantity", 0),
+                "exchange_order_id": order_details.get("exchange_order_id"),
+                "parent_order_id": order_details.get("parent_order_id"),
+                "meta": order_details.get("meta", {})
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching order details: {e}")
+            raise
+
+    def validate_order(self, account_id: int, params: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Validate order parameters before placing an order
+        Returns validation result with any errors or warnings
+        """
+        errors = []
+        warnings = []
+
+        # Check required fields
+        required_fields = ["tradingsymbol", "transaction_type", "quantity"]
+        for field in required_fields:
+            if not params.get(field):
+                errors.append(f"Missing required field: {field}")
+
+        # Validate transaction type
+        transaction_type = params.get("transaction_type", "").upper()
+        if transaction_type not in ["BUY", "SELL"]:
+            errors.append("transaction_type must be 'BUY' or 'SELL'")
+
+        # Validate quantity
+        quantity = params.get("quantity", 0)
+        if quantity <= 0:
+            errors.append("Quantity must be greater than 0")
+
+        # Validate order type
+        order_type = params.get("order_type", "MARKET").upper()
+        if order_type not in ["MARKET", "LIMIT", "SL", "SL-M"]:
+            errors.append("order_type must be 'MARKET', 'LIMIT', 'SL', or 'SL-M'")
+
+        # Validate price for LIMIT orders
+        if order_type in ["LIMIT", "SL"] and not params.get("price"):
+            errors.append(f"Price is required for {order_type} orders")
+
+        # Validate product
+        product = params.get("product", "CNC").upper()
+        if product not in ["CNC", "MIS", "NRML"]:
+            errors.append("product must be 'CNC', 'MIS', or 'NRML'")
+
+        # Validate exchange
+        exchange = params.get("exchange", "NSE").upper()
+        if exchange not in ["NSE", "BSE", "MCX", "NFO"]:
+            warnings.append(f"Exchange '{exchange}' may not be valid")
+
+        # Check for account validity
+        account = self.get_account(account_id)
+        if not account:
+            errors.append(f"Account {account_id} not found")
+
+        # Check token expiry
+        if account and account.token_expires_at and datetime.utcnow() > account.token_expires_at:
+            errors.append("Access token expired. Please re-login.")
+
+        # Warnings for specific order types
+        if product == "MIS" and order_type == "MARKET":
+            warnings.append("Market orders in MIS product may have slippage")
+
+        if quantity > 1000:
+            warnings.append(f"Large order quantity ({quantity}) may impact execution")
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors,
+            "warnings": warnings,
+            "validated_params": {
+                "tradingsymbol": params.get("tradingsymbol"),
+                "exchange": exchange,
+                "transaction_type": transaction_type,
+                "quantity": quantity,
+                "order_type": order_type,
+                "product": product,
+                "price": params.get("price"),
+                "validity": params.get("validity", "DAY"),
+                "variety": params.get("variety", "regular")
+            }
+        }
+
+    def bulk_place_orders(self, account_id: int, orders: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Place multiple orders in bulk
+        orders: List of order parameter dictionaries
+        Returns list of order responses
+        """
+        results = []
+
+        for i, order_params in enumerate(orders):
+            try:
+                # Validate each order
+                validation = self.validate_order(account_id, order_params)
+                if not validation["valid"]:
+                    results.append({
+                        "index": i,
+                        "stock": order_params.get("tradingsymbol"),
+                        "status": "FAILED",
+                        "error": "Validation failed",
+                        "validation_errors": validation["errors"]
+                    })
+                    continue
+
+                # Place the order
+                result = self.place_order(account_id, order_params)
+                results.append({
+                    "index": i,
+                    "stock": order_params.get("tradingsymbol"),
+                    "status": "PLACED",
+                    "order_id": result.get("order_id")
+                })
+
+            except Exception as e:
+                logger.error(f"Error placing bulk order {i}: {e}")
+                results.append({
+                    "index": i,
+                    "stock": order_params.get("tradingsymbol"),
+                    "status": "FAILED",
+                    "error": str(e)
+                })
+
+        success_count = sum(1 for r in results if r["status"] == "PLACED")
+        logger.info(f"Bulk order placement: {success_count}/{len(orders)} successful")
+
+        return {
+            "total": len(orders),
+            "successful": success_count,
+            "failed": len(orders) - success_count,
+            "results": results
+        }
+
+    def get_order_book(self, account_id: int, status: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Get order book (list of all orders) for an account
+        status: Optional filter by status (OPEN, PENDING, COMPLETE, CANCELLED, REJECTED)
+        Returns list of orders
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            orders = kite.orders()
+
+            # Filter by status if provided
+            if status:
+                orders = [o for o in orders if o.get("status") == status]
+
+            # Format orders
+            formatted_orders = []
+            for order in orders:
+                formatted_orders.append({
+                    "order_id": order.get("order_id"),
+                    "stock": order.get("tradingsymbol"),
+                    "exchange": order.get("exchange"),
+                    "quantity": order.get("quantity"),
+                    "price": order.get("average_price"),
+                    "order_type": order.get("order_type"),
+                    "transaction_type": order.get("transaction_type"),
+                    "status": order.get("status"),
+                    "product": order.get("product"),
+                    "validity": order.get("validity"),
+                    "variety": order.get("variety"),
+                    "placed_at": datetime.fromtimestamp(order.get("order_timestamp", 0)).isoformat(),
+                    "filled_quantity": order.get("filled_quantity", 0),
+                    "pending_quantity": order.get("pending_quantity", 0),
+                    "average_price": order.get("average_price", 0)
+                })
+
+            # Sort by placed_at descending
+            formatted_orders.sort(key=lambda x: x["placed_at"], reverse=True)
+
+            return formatted_orders
+
+        except Exception as e:
+            logger.error(f"Error fetching order book: {e}")
+            raise
+
+    def cancel_all_pending_orders(self, account_id: int) -> Dict[str, Any]:
+        """
+        Cancel all pending orders for an account
+        Returns summary of cancelled orders
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            orders = kite.orders()
+
+            # Filter pending orders
+            pending_orders = [o for o in orders if o.get("status") in ["OPEN", "PENDING"]]
+
+            results = []
+            for order in pending_orders:
+                try:
+                    kite.cancel_order(order_id=order.get("order_id"), variety="regular")
+                    results.append({
+                        "order_id": order.get("order_id"),
+                        "stock": order.get("tradingsymbol"),
+                        "status": "CANCELLED"
+                    })
+                except Exception as e:
+                    logger.error(f"Error cancelling order {order.get('order_id')}: {e}")
+                    results.append({
+                        "order_id": order.get("order_id"),
+                        "stock": order.get("tradingsymbol"),
+                        "status": "FAILED",
+                        "error": str(e)
+                    })
+
+            success_count = sum(1 for r in results if r["status"] == "CANCELLED")
+            logger.info(f"Cancelled {success_count}/{len(pending_orders)} pending orders")
+
+            return {
+                "total_pending": len(pending_orders),
+                "cancelled": success_count,
+                "failed": len(pending_orders) - success_count,
+                "results": results
+            }
+
+        except Exception as e:
+            logger.error(f"Error cancelling pending orders: {e}")
+            raise
+
+    def get_order_trades(self, account_id: int, order_id: str) -> List[Dict[str, Any]]:
+        """
+        Get trade history for a specific order
+        Returns list of trades executed for the order
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            trades = kite.order_trades(order_id=order_id)
+
+            formatted_trades = []
+            for trade in trades:
+                formatted_trades.append({
+                    "trade_id": trade.get("trade_id"),
+                    "order_id": trade.get("order_id"),
+                    "stock": trade.get("tradingsymbol"),
+                    "exchange": trade.get("exchange"),
+                    "quantity": trade.get("quantity"),
+                    "price": trade.get("average_price"),
+                    "transaction_type": trade.get("transaction_type"),
+                    "exchange_timestamp": datetime.fromtimestamp(trade.get("exchange_timestamp", 0)).isoformat(),
+                    "exchange_order_id": trade.get("exchange_order_id")
+                })
+
+            return formatted_trades
+
+        except Exception as e:
+            logger.error(f"Error fetching order trades: {e}")
+            raise
+
+    def get_trade_book(self, account_id: int) -> List[Dict[str, Any]]:
+        """
+        Get complete trade book (all executed trades) for an account
+        Returns list of all trades
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            trades = kite.trades()
+
+            formatted_trades = []
+            for trade in trades:
+                formatted_trades.append({
+                    "trade_id": trade.get("trade_id"),
+                    "order_id": trade.get("order_id"),
+                    "stock": trade.get("tradingsymbol"),
+                    "exchange": trade.get("exchange"),
+                    "quantity": trade.get("quantity"),
+                    "price": trade.get("average_price"),
+                    "transaction_type": trade.get("transaction_type"),
+                    "exchange_timestamp": datetime.fromtimestamp(trade.get("exchange_timestamp", 0)).isoformat(),
+                    "exchange_order_id": trade.get("exchange_order_id")
+                })
+
+            # Sort by timestamp descending
+            formatted_trades.sort(key=lambda x: x["exchange_timestamp"], reverse=True)
+
+            return formatted_trades
+
+        except Exception as e:
+            logger.error(f"Error fetching trade book: {e}")
+            raise
+
     def squareoff_position(self, account_id: int, params: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Square off a position
@@ -614,4 +978,288 @@ class KiteManager:
             }
         except Exception as e:
             logger.error(f"Error refreshing data for account {account_id}: {e}")
+            raise
+
+    def fetch_stock_quote(self, account_id: int, tradingsymbol: str, exchange: str = "NSE") -> Optional[Dict[str, Any]]:
+        """
+        Fetch current quote (price) for a stock
+        Returns dict with last_price, day_high, day_low, volume, etc.
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return None
+
+            quote = kite.quote(f"{exchange}:{tradingsymbol}")
+
+            if not quote:
+                return None
+
+            # Extract quote data
+            quote_key = f"{exchange}:{tradingsymbol}"
+            quote_data = quote.get(quote_key, {})
+
+            return {
+                "tradingsymbol": tradingsymbol,
+                "exchange": exchange,
+                "instrument_token": instrument_token,
+                "last_price": quote_data.get("last_price", 0),
+                "day_high": quote_data.get("ohlc", {}).get("high", 0),
+                "day_low": quote_data.get("ohlc", {}).get("low", 0),
+                "day_open": quote_data.get("ohlc", {}).get("open", 0),
+                "day_close": quote_data.get("ohlc", {}).get("close", 0),
+                "volume": quote_data.get("volume", 0),
+                "average_price": quote_data.get("average_price", 0),
+                "total_buy_quantity": quote_data.get("total_buy_quantity", 0),
+                "total_sell_quantity": quote_data.get("total_sell_quantity", 0),
+                "oi": quote_data.get("oi", 0),
+                "oi_day_high": quote_data.get("oi_day_high", 0),
+                "oi_day_low": quote_data.get("oi_day_low", 0),
+                "timestamp": quote_data.get("timestamp"),
+                "last_trade_time": quote_data.get("last_trade_time")
+            }
+
+        except Exception as e:
+            logger.error(f"Error fetching quote for {tradingsymbol}: {e}")
+            raise
+
+    def fetch_stock_quotes(self, account_id: int, tradingsymbols: List[str], exchange: str = "NSE") -> List[Dict[str, Any]]:
+        """
+        Fetch quotes for multiple stocks at once
+        Returns list of quote dicts
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            # Build instrument list
+            instruments = [f"{exchange}:{symbol}" for symbol in tradingsymbols]
+
+            # Fetch quotes
+            quotes = kite.quote(instruments)
+
+            results = []
+            for tradingsymbol in tradingsymbols:
+                quote_key = f"{exchange}:{tradingsymbol}"
+                quote_data = quotes.get(quote_key, {})
+
+                if quote_data:
+                    results.append({
+                        "tradingsymbol": tradingsymbol,
+                        "exchange": exchange,
+                        "last_price": quote_data.get("last_price", 0),
+                        "day_high": quote_data.get("ohlc", {}).get("high", 0),
+                        "day_low": quote_data.get("ohlc", {}).get("low", 0),
+                        "day_open": quote_data.get("ohlc", {}).get("open", 0),
+                        "day_close": quote_data.get("ohlc", {}).get("close", 0),
+                        "volume": quote_data.get("volume", 0),
+                        "average_price": quote_data.get("average_price", 0),
+                        "total_buy_quantity": quote_data.get("total_buy_quantity", 0),
+                        "total_sell_quantity": quote_data.get("total_sell_quantity", 0),
+                        "oi": quote_data.get("oi", 0),
+                        "oi_day_high": quote_data.get("oi_day_high", 0),
+                        "oi_day_low": quote_data.get("oi_day_low", 0),
+                        "timestamp": quote_data.get("timestamp"),
+                        "last_trade_time": quote_data.get("last_trade_time")
+                    })
+
+            logger.info(f"Fetched {len(results)} quotes for {len(tradingsymbols)} symbols")
+            return results
+
+        except Exception as e:
+            logger.error(f"Error fetching quotes: {e}")
+            raise
+
+    def fetch_historical_data(
+        self,
+        account_id: int,
+        tradingsymbol: str,
+        exchange: str = "NSE",
+        interval: str = "day",
+        from_date: Optional[datetime] = None,
+        to_date: Optional[datetime] = None,
+        continuous: bool = False
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch historical candle data for a stock
+        interval: "minute", "day", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute", "week"
+        from_date: Start date (defaults to 30 days ago)
+        to_date: End date (defaults to today)
+        continuous: If True, fetch continuous data for futures/options
+        Returns list of OHLCV candles
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return []
+
+            # Set default dates
+            if not to_date:
+                to_date = datetime.utcnow()
+            if not from_date:
+                from_date = to_date - timedelta(days=30)
+
+            # Fetch historical data
+            data = kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=from_date,
+                to_date=to_date,
+                interval=interval,
+                continuous=continuous
+            )
+
+            # Format candles
+            candles = []
+            for candle in data:
+                candles.append({
+                    "date": candle.get("date"),
+                    "open": candle.get("open"),
+                    "high": candle.get("high"),
+                    "low": candle.get("low"),
+                    "close": candle.get("close"),
+                    "volume": candle.get("volume")
+                })
+
+            logger.info(f"Fetched {len(candles)} candles for {tradingsymbol} ({interval})")
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {tradingsymbol}: {e}")
+            raise
+
+    def fetch_intraday_data(
+        self,
+        account_id: int,
+        tradingsymbol: str,
+        exchange: str = "NSE",
+        interval: str = "minute"
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch intraday candle data for today
+        interval: "minute", "3minute", "5minute", "10minute", "15minute", "30minute", "60minute"
+        Returns list of OHLCV candles
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instrument_token = self._get_instrument_token(account_id, tradingsymbol, exchange)
+            if not instrument_token:
+                logger.error(f"Instrument token not found for {tradingsymbol} on {exchange}")
+                return []
+
+            # Get today's date
+            today = datetime.utcnow()
+            from_date = today.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # Fetch intraday data
+            data = kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=from_date,
+                to_date=today,
+                interval=interval
+            )
+
+            # Format candles
+            candles = []
+            for candle in data:
+                candles.append({
+                    "date": candle.get("date"),
+                    "open": candle.get("open"),
+                    "high": candle.get("high"),
+                    "low": candle.get("low"),
+                    "close": candle.get("close"),
+                    "volume": candle.get("volume")
+                })
+
+            logger.info(f"Fetched {len(candles)} intraday candles for {tradingsymbol} ({interval})")
+            return candles
+
+        except Exception as e:
+            logger.error(f"Error fetching intraday data for {tradingsymbol}: {e}")
+            raise
+
+    def _get_instrument_token(self, account_id: int, tradingsymbol: str, exchange: str) -> Optional[str]:
+        """
+        Get instrument token for a trading symbol
+        This is a helper method that caches instrument tokens
+        """
+        # Check cache first
+        cache_key = f"{exchange}:{tradingsymbol}"
+        if hasattr(self, '_instrument_cache') and cache_key in self._instrument_cache:
+            return self._instrument_cache[cache_key]
+
+        # Initialize cache if not exists
+        if not hasattr(self, '_instrument_cache'):
+            self._instrument_cache = {}
+
+        kite = self.get_kite(account_id)
+        if not kite:
+            return None
+
+        try:
+            # Fetch instruments for the exchange
+            instruments = kite.instruments(exchange)
+
+            # Find the instrument token
+            for instrument in instruments:
+                if instrument.get("tradingsymbol") == tradingsymbol:
+                    token = instrument.get("instrument_token")
+                    self._instrument_cache[cache_key] = token
+                    return token
+
+            logger.warning(f"Instrument token not found for {tradingsymbol} on {exchange}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error fetching instrument token: {e}")
+            return None
+
+    def get_instruments(self, account_id: int, exchange: str = "NSE") -> List[Dict[str, Any]]:
+        """
+        Get all instruments for an exchange
+        Returns list of instrument details
+        """
+        kite = self.get_kite(account_id)
+        if not kite:
+            raise ValueError("KiteConnect instance not available. Token may be expired.")
+
+        try:
+            instruments = kite.instruments(exchange)
+
+            # Format instruments
+            formatted = []
+            for instrument in instruments:
+                formatted.append({
+                    "instrument_token": instrument.get("instrument_token"),
+                    "exchange_token": instrument.get("exchange_token"),
+                    "tradingsymbol": instrument.get("tradingsymbol"),
+                    "name": instrument.get("name"),
+                    "last_price": instrument.get("last_price"),
+                    "expiry": instrument.get("expiry"),
+                    "strike": instrument.get("strike"),
+                    "tick_size": instrument.get("tick_size"),
+                    "lot_size": instrument.get("lot_size"),
+                    "instrument_type": instrument.get("instrument_type"),
+                    "segment": instrument.get("segment"),
+                    "exchange": instrument.get("exchange")
+                })
+
+            logger.info(f"Fetched {len(formatted)} instruments for {exchange}")
+            return formatted
+
+        except Exception as e:
+            logger.error(f"Error fetching instruments: {e}")
             raise

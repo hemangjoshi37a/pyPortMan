@@ -50,6 +50,7 @@ from position_sizing import PositionSizingManager
 from charts import ChartsManager
 from technical_alerts import TechnicalAlertsManager
 from notifications import NotificationsManager
+from rebalancing import RebalancingManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -796,6 +797,136 @@ def cancel_order(order_id: str, account_id: int, db: Session = Depends(get_db)):
             logger.error(f"Error sending order cancel alert: {e}")
 
         return {"message": "Order cancelled successfully"}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== ORDER MANAGEMENT ====================
+
+class OrderModifyRequest(BaseModel):
+    price: Optional[float] = None
+    quantity: Optional[int] = None
+    order_type: Optional[str] = None
+    validity: Optional[str] = None
+
+class BulkOrderRequest(BaseModel):
+    orders: List[OrderPlaceRequest]
+
+@app.put("/orders/{order_id}/modify")
+def modify_order(order_id: str, account_id: int, params: OrderModifyRequest, db: Session = Depends(get_db)):
+    """Modify an existing order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        result = kite_manager.modify_order(account_id, order_id, params.model_dump(exclude_none=True))
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{order_id}/details")
+def get_order_details(order_id: str, account_id: int, db: Session = Depends(get_db)):
+    """Get detailed information about a specific order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_details(account_id, order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/validate")
+def validate_order(account_id: int, order: OrderPlaceRequest, db: Session = Depends(get_db)):
+    """Validate order parameters before placing"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.validate_order(account_id, order.model_dump())
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/bulk")
+def bulk_place_orders(account_id: int, request: BulkOrderRequest, db: Session = Depends(get_db)):
+    """Place multiple orders in bulk"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.bulk_place_orders(account_id, [o.model_dump() for o in request.orders])
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{account_id}/book")
+def get_order_book(account_id: int, status: Optional[str] = None, db: Session = Depends(get_db)):
+    """Get order book (list of all orders) for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_book(account_id, status)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/orders/cancel-all-pending")
+def cancel_all_pending_orders(account_id: int, db: Session = Depends(get_db)):
+    """Cancel all pending orders for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.cancel_all_pending_orders(account_id)
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{order_id}/trades")
+def get_order_trades(order_id: str, account_id: int, db: Session = Depends(get_db)):
+    """Get trade history for a specific order"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_order_trades(account_id, order_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/orders/{account_id}/trades")
+def get_trade_book(account_id: int, db: Session = Depends(get_db)):
+    """Get complete trade book (all executed trades) for an account"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        return kite_manager.get_trade_book(account_id)
     except ValueError as e:
         raise HTTPException(status_code=401, detail=str(e))
     except Exception as e:
@@ -1583,6 +1714,24 @@ def get_analytics_trading_activity(days: int = Query(30, ge=1, le=365), db: Sess
     manager = AnalyticsManager(db)
     return manager.get_trading_activity(days)
 
+@app.get("/analytics/comprehensive-analysis")
+def get_comprehensive_analysis(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get comprehensive portfolio analysis with advanced metrics"""
+    manager = AnalyticsManager(db)
+    return manager.get_comprehensive_portfolio_analysis(account_id)
+
+@app.get("/analytics/correlation-matrix")
+def get_correlation_matrix(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get correlation matrix for portfolio holdings"""
+    manager = AnalyticsManager(db)
+    return manager.get_portfolio_correlation_matrix(account_id)
+
+@app.get("/analytics/portfolio-attribution")
+def get_portfolio_attribution(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Analyze portfolio performance attribution by stock and sector"""
+    manager = AnalyticsManager(db)
+    return manager.get_portfolio_attribution(account_id)
+
 # ==================== WATCHLIST ====================
 
 @app.get("/watchlist", response_model=List[WatchlistResponse])
@@ -1907,6 +2056,218 @@ def get_dashboard_summary_chart(
     """Get complete dashboard summary with all chart data"""
     manager = ChartsManager(db)
     return manager.get_dashboard_summary(account_id)
+
+# ==================== REBALANCING MODELS ====================
+
+class TargetAllocationRequest(BaseModel):
+    target_allocations: Dict[str, float] = Field(..., description="Target allocation percentages (e.g., {'RELIANCE': 20, 'TCS': 15})")
+    total_portfolio_value: Optional[float] = Field(None, description="Optional total value to use")
+    min_trade_amount: float = Field(default=1000, description="Minimum trade amount")
+    max_trade_amount: Optional[float] = Field(None, description="Maximum trade amount per stock")
+    allow_cash_buffer: float = Field(default=0.05, description="Percentage to keep as cash")
+
+class SuggestAllocationRequest(BaseModel):
+    strategy: str = Field(default="equal_weight", description="Strategy: equal_weight, value_weighted, risk_parity")
+    max_stocks: int = Field(default=10, description="Maximum number of stocks")
+    min_allocation: float = Field(default=5.0, description="Minimum allocation percentage")
+
+class SimulateRebalanceRequest(BaseModel):
+    target_allocations: Dict[str, float] = Field(..., description="Target allocation percentages")
+    transaction_cost_pct: float = Field(default=0.1, description="Transaction cost percentage")
+
+# ==================== REBALANCING ====================
+
+@app.get("/rebalancing/current-allocation/{account_id}")
+def get_current_allocation(account_id: int, db: Session = Depends(get_db)):
+    """Get current portfolio allocation by stock"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = RebalancingManager(db)
+    return manager.get_current_allocation(account_id)
+
+@app.get("/rebalancing/summary/{account_id}")
+def get_rebalancing_summary(account_id: int, db: Session = Depends(get_db)):
+    """Get rebalancing summary with concentration metrics"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = RebalancingManager(db)
+    return manager.get_rebalancing_summary(account_id)
+
+@app.post("/rebalancing/calculate-trades/{account_id}")
+def calculate_rebalance_trades(account_id: int, request: TargetAllocationRequest, db: Session = Depends(get_db)):
+    """Calculate required trades to rebalance portfolio"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = RebalancingManager(db)
+    return manager.calculate_rebalance_trades(
+        account_id,
+        request.target_allocations,
+        request.total_portfolio_value,
+        request.min_trade_amount,
+        request.max_trade_amount,
+        request.allow_cash_buffer
+    )
+
+@app.post("/rebalancing/suggest-allocation/{account_id}")
+def suggest_target_allocation(account_id: int, request: SuggestAllocationRequest, db: Session = Depends(get_db)):
+    """Suggest target allocations based on strategy"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = RebalancingManager(db)
+    return manager.suggest_target_allocation(
+        account_id,
+        request.strategy,
+        request.max_stocks,
+        request.min_allocation
+    )
+
+@app.post("/rebalancing/simulate/{account_id}")
+def simulate_rebalance(account_id: int, request: SimulateRebalanceRequest, db: Session = Depends(get_db)):
+    """Simulate rebalancing and show pre/post comparison"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    manager = RebalancingManager(db)
+    return manager.simulate_rebalance(
+        account_id,
+        request.target_allocations,
+        request.transaction_cost_pct
+    )
+
+# ==================== STOCK DATA ====================
+
+class StockQuoteRequest(BaseModel):
+    tradingsymbol: str = Field(..., description="Trading symbol (e.g., RELIANCE)")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+
+class StockQuotesRequest(BaseModel):
+    tradingsymbols: List[str] = Field(..., description="List of trading symbols")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+
+class HistoricalDataRequest(BaseModel):
+    tradingsymbol: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    interval: str = Field(default="day", description="Interval: minute, day, 3minute, 5minute, 10minute, 15minute, 30minute, 60minute, week")
+    from_date: Optional[str] = Field(None, description="From date (YYYY-MM-DD)")
+    to_date: Optional[str] = Field(None, description="To date (YYYY-MM-DD)")
+    continuous: bool = Field(default=False, description="Continuous data for futures/options")
+
+class IntradayDataRequest(BaseModel):
+    tradingsymbol: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    interval: str = Field(default="minute", description="Interval: minute, 3minute, 5minute, 10minute, 15minute, 30minute, 60minute")
+
+@app.get("/stock/quote")
+def get_stock_quote(account_id: int, tradingsymbol: str, exchange: str = "NSE", db: Session = Depends(get_db)):
+    """Get current quote (price) for a single stock"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        quote = kite_manager.fetch_stock_quote(account_id, tradingsymbol, exchange)
+        if not quote:
+            raise HTTPException(status_code=404, detail="Stock not found or data unavailable")
+        return quote
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stock/quotes")
+def get_stock_quotes(account_id: int, request: StockQuotesRequest, db: Session = Depends(get_db)):
+    """Get quotes for multiple stocks at once"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        quotes = kite_manager.fetch_stock_quotes(account_id, request.tradingsymbols, request.exchange)
+        return {"quotes": quotes, "count": len(quotes)}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stock/historical")
+def get_historical_data(account_id: int, request: HistoricalDataRequest, db: Session = Depends(get_db)):
+    """Get historical candle data for a stock"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        # Parse dates if provided
+        from_date = None
+        to_date = None
+        if request.from_date:
+            from_date = datetime.strptime(request.from_date, "%Y-%m-%d")
+        if request.to_date:
+            to_date = datetime.strptime(request.to_date, "%Y-%m-%d")
+
+        candles = kite_manager.fetch_historical_data(
+            account_id,
+            request.tradingsymbol,
+            request.exchange,
+            request.interval,
+            from_date,
+            to_date,
+            request.continuous
+        )
+        return {"tradingsymbol": request.tradingsymbol, "exchange": request.exchange, "interval": request.interval, "candles": candles, "count": len(candles)}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/stock/intraday")
+def get_intraday_data(account_id: int, request: IntradayDataRequest, db: Session = Depends(get_db)):
+    """Get intraday candle data for today"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        candles = kite_manager.fetch_intraday_data(
+            account_id,
+            request.tradingsymbol,
+            request.exchange,
+            request.interval
+        )
+        return {"tradingsymbol": request.tradingsymbol, "exchange": request.exchange, "interval": request.interval, "candles": candles, "count": len(candles)}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/stock/instruments")
+def get_instruments(account_id: int, exchange: str = "NSE", db: Session = Depends(get_db)):
+    """Get all instruments for an exchange"""
+    account = db.query(Account).filter(Account.id == account_id).first()
+    if not account:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+    kite_manager = KiteManager(db)
+    try:
+        instruments = kite_manager.get_instruments(account_id, exchange)
+        return {"exchange": exchange, "instruments": instruments, "count": len(instruments)}
+    except ValueError as e:
+        raise HTTPException(status_code=401, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== HEALTH ====================
 

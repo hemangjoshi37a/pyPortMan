@@ -1,0 +1,392 @@
+// Simplified EMA + OB Strategy - More Trades
+//@version=5
+strategy('Simplified EMA + OB Strategy', overlay=true, initial_capital=10000, default_qty_type=strategy.percent_of_equity, default_qty_value=10)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// INPUTS
+//---------------------------------------------------------------------------------------------------------------------{
+// EMA Settings
+EMA_GROUP = 'EMA Trend Filter'
+emaLength = input.int(9, 'EMA Length', minval=5, maxval=50, group=EMA_GROUP)
+higherTimeframe = input.timeframe('15', 'Higher Timeframe for Trend', group=EMA_GROUP)
+emaColor = input.color(color.blue, 'EMA Color', group=EMA_GROUP)
+
+// Order Block Settings
+OB_GROUP = 'Order Block Settings'
+showInternalOB = input.bool(true, 'Show Internal Order Blocks', group=OB_GROUP)
+internalOBCount = input.int(5, 'Internal OB Count', minval=1, maxval=20, group=OB_GROUP)
+
+// Confirmation Settings
+CONFIRM_GROUP = 'Confirmation Settings'
+enableConfirmation = input.bool(false, 'Enable Previous Reaction Confirmation', group=CONFIRM_GROUP)
+lookbackBars = input.int(20, 'Lookback Bars for Reaction', minval=10, maxval=200, group=CONFIRM_GROUP)
+reactionThreshold = input.float(0.3, 'Reaction Threshold %', minval=0.1, maxval=1.0, step=0.1, group=CONFIRM_GROUP)
+
+// Entry Settings
+ENTRY_GROUP = 'Entry Settings'
+entryCandleCount = input.int(2, 'Candles Close for Entry', minval=1, maxval=10, group=ENTRY_GROUP)
+riskReward = input.float(1.5, 'Risk:Reward Ratio', minval=1.0, maxval=5.0, step=0.5, group=ENTRY_GROUP)
+
+// RSI Filter (Disabled by default)
+RSI_GROUP = 'RSI Filter'
+enableRSI = input.bool(false, 'Enable RSI Filter', group=RSI_GROUP)
+rsiLength = input.int(14, 'RSI Length', minval=5, maxval=50, group=RSI_GROUP)
+rsiOverbought = input.int(70, 'RSI Overbought', minval=50, maxval=90, group=RSI_GROUP)
+rsiOversold = input.int(30, 'RSI Oversold', minval=10, maxval=50, group=RSI_GROUP)
+
+// Volume Filter (Disabled by default)
+VOL_GROUP = 'Volume Filter'
+enableVolume = input.bool(false, 'Enable Volume Filter', group=VOL_GROUP)
+volumeLength = input.int(20, 'Volume MA Length', minval=5, maxval=50, group=VOL_GROUP)
+volumeMultiplier = input.float(1.2, 'Volume Multiplier', minval=1.0, maxval=3.0, step=0.1, group=VOL_GROUP)
+
+// Time Filter (Disabled by default)
+TIME_GROUP = 'Time Filter'
+enableTimeFilter = input.bool(false, 'Enable Time Filter', group=TIME_GROUP)
+startHour = input.int(9, 'Start Hour', minval=0, maxval=23, group=TIME_GROUP)
+endHour = input.int(16, 'End Hour', minval=0, maxval=23, group=TIME_GROUP)
+
+// ATR Settings
+ATR_GROUP = 'ATR Settings'
+atrLength = input.int(14, 'ATR Length', minval=5, maxval=50, group=ATR_GROUP)
+atrMultiplier = input.float(1.0, 'ATR SL Multiplier', minval=1.0, maxval=3.0, step=0.1, group=ATR_GROUP)
+
+// Colors
+bullishOBColor = input.color(color.new(#3179f5, 70), 'Bullish OB Color', group='Colors')
+bearishOBColor = input.color(color.new(#f77c80, 70), 'Bearish OB Color', group='Colors')
+confirmedBullColor = input.color(#00ff00, 'Confirmed Bullish', group='Colors')
+confirmedBearColor = input.color(#ff0000, 'Confirmed Bearish', group='Colors')
+reactionLineColor = input.color(color.new(#ffff00, 50), 'Reaction Line Color', group='Colors')
+trendUpColor = input.color(color.new(#00ff00, 70), 'Trend Up Zone', group='Colors')
+trendDownColor = input.color(color.new(#ff0000, 70), 'Trend Down Zone', group='Colors')
+
+//---------------------------------------------------------------------------------------------------------------------}
+// DATA STRUCTURES
+//---------------------------------------------------------------------------------------------------------------------{
+// Order Block Type
+type orderBlock
+    float high
+    float low
+    int barTime
+    int bias
+    bool confirmed
+    line reactionLine
+    box obBox
+
+// Arrays for Order Blocks
+var array<orderBlock> internalOBs = array.new<orderBlock>()
+
+// Variables
+var float currentBullishOBLevel = na
+var float currentBearishOBLevel = na
+var bool bullishOBConfirmed = false
+var bool bearishOBConfirmed = false
+
+// Trend Variables
+var float higherEMA = na
+var int trendDirection = 0  // 1 = Uptrend, -1 = Downtrend, 0 = Neutral
+
+//---------------------------------------------------------------------------------------------------------------------}
+// FUNCTIONS
+//---------------------------------------------------------------------------------------------------------------------{
+// Get EMA from higher timeframe
+getHigherEMA() =>
+    request.security(syminfo.tickerid, higherTimeframe, ta.ema(close, emaLength), lookahead=barmerge.lookahead_on, gaps=barmerge.gaps_off)
+
+// Check RSI Filter
+checkRSIFilter(int bias) =>
+    if not enableRSI
+        true
+    else
+        float rsi = ta.rsi(close, rsiLength)
+        if bias == 1  // Long - RSI not overbought
+            rsi < rsiOverbought
+        else  // Short - RSI not oversold
+            rsi > rsiOversold
+
+// Check Volume Filter
+checkVolumeFilter() =>
+    if not enableVolume
+        true
+    else
+        float volMA = ta.sma(volume, volumeLength)
+        volume > volMA * volumeMultiplier
+
+// Check Time Filter
+checkTimeFilter() =>
+    if not enableTimeFilter
+        true
+    else
+        int currentHour = hour(time)
+        if startHour <= endHour
+            currentHour >= startHour and currentHour <= endHour
+        else
+            currentHour >= startHour or currentHour <= endHour
+
+// Check for price reaction at a level
+checkReaction(float level, int bias, int lookback) =>
+    bool reaction = false
+
+    for i = 1 to lookback
+        if i >= bar_index
+            break
+
+        float barHigh = high[i]
+        float barLow = low[i]
+        float barClose = close[i]
+        float barOpen = open[i]
+
+        // Check if price touched the level
+        bool touched = bias == 1 ? (barLow <= level and barHigh >= level) : (barLow <= level and barHigh >= level)
+
+        if touched
+            // Check for reaction (rejection/bounce)
+            float candleRange = barHigh - barLow
+            float bodySize = math.abs(barClose - barOpen)
+
+            // Bullish OB reaction: price touched and bounced up
+            if bias == 1  // Bullish OB
+                if barClose > barOpen and bodySize > candleRange * reactionThreshold
+                    reaction := true
+                    break
+            // Bearish OB reaction: price touched and bounced down
+            else if bias == -1  // Bearish OB
+                if barClose < barOpen and bodySize > candleRange * reactionThreshold
+                    reaction := true
+                    break
+
+    reaction
+
+// Create Order Block
+createOB(float obHigh, float obLow, int barTime, int bias) =>
+    orderBlock.new(obHigh, obLow, barTime, bias, false, na, na)
+
+// Draw Order Block
+drawOB(orderBlock ob, bool confirmed) =>
+    color obColor = ob.bias == 1 ? bullishOBColor : bearishOBColor
+    if confirmed
+        obColor := ob.bias == 1 ? confirmedBullColor : confirmedBearColor
+
+    if na(ob.obBox)
+        ob.obBox := box.new(ob.barTime, ob.high, time, ob.low, bgcolor=obColor, border_color=ob.bias == 1 ? color.green : color.red, xloc=xloc.bar_time)
+    else
+        box.set_top_left_point(ob.obBox, chart.point.new(ob.barTime, na, ob.high))
+        box.set_bottom_right_point(ob.obBox, chart.point.new(time, na, ob.low))
+        box.set_bgcolor(ob.obBox, obColor)
+        box.set_border_color(ob.obBox, ob.bias == 1 ? color.green : color.red)
+    true
+
+// Draw reaction line backwards
+drawReactionLine(orderBlock ob) =>
+    float level = ob.bias == 1 ? ob.low : ob.high
+    int lookbackTime = math.max(time[1], ob.barTime - (lookbackBars * (time - time[1])))
+
+    if na(ob.reactionLine)
+        ob.reactionLine := line.new(lookbackTime, level, ob.barTime, level, color=reactionLineColor, style=line.style_dashed, width=1, xloc=xloc.bar_time)
+    else
+        line.set_first_point(ob.reactionLine, chart.point.new(lookbackTime, na, level))
+        line.set_second_point(ob.reactionLine, chart.point.new(ob.barTime, na, level))
+    true
+
+// Detect Order Blocks
+detectOrderBlocks() =>
+    // Simple OB detection based on strong moves
+    float body = math.abs(close - open)
+    float candleRange = high - low
+
+    // Bullish OB: Strong bullish candle followed by bearish move
+    bool bullishOB = close > open and body > candleRange * 0.5 and close[1] < open[1] and close[1] < close
+
+    // Bearish OB: Strong bearish candle followed by bullish move
+    bool bearishOB = close < open and body > candleRange * 0.5 and close[1] > open[1] and close[1] > close
+
+    if bullishOB
+        orderBlock newOB = createOB(high, low, time, 1)
+        internalOBs.unshift(newOB)
+        if internalOBs.size() > internalOBCount
+            internalOBs.pop()
+
+    if bearishOB
+        orderBlock newOB = createOB(high, low, time, -1)
+        internalOBs.unshift(newOB)
+        if internalOBs.size() > internalOBCount
+            internalOBs.pop()
+
+// Check and confirm Order Blocks
+confirmOrderBlocks() =>
+    if internalOBs.size() > 0
+        for i = 0 to internalOBs.size() - 1
+            orderBlock ob = internalOBs.get(i)
+
+            if not ob.confirmed and enableConfirmation
+                bool hasReaction = checkReaction(ob.bias == 1 ? ob.low : ob.high, ob.bias, lookbackBars)
+
+                if hasReaction
+                    ob.confirmed := true
+                    drawReactionLine(ob)
+
+            drawOB(ob, ob.confirmed)
+
+// Check entry conditions with all filters
+checkEntry() =>
+    bool longEntry = false
+    bool shortEntry = false
+    float bullishLevel = na
+    float bearishLevel = na
+
+    // Check all filters first
+    bool timeOK = checkTimeFilter()
+    bool volumeOK = checkVolumeFilter()
+
+    // Only trade if trend is clear and we have OBs
+    if trendDirection != 0 and internalOBs.size() > 0 and timeOK and volumeOK
+        // Find most recent OB (confirmed or not if confirmation disabled)
+        for i = 0 to internalOBs.size() - 1
+            orderBlock ob = internalOBs.get(i)
+
+            // If confirmation is enabled, only use confirmed OBs
+            if not enableConfirmation or ob.confirmed
+                float obLevel = ob.bias == 1 ? ob.low : ob.high
+
+                // Check RSI filter for this OB bias
+                bool rsiOK = checkRSIFilter(ob.bias)
+
+                if rsiOK
+                    // Check candle close condition
+                    int closeCount = 0
+                    for j = 1 to entryCandleCount
+                        if ob.bias == 1  // Bullish OB - check closes above
+                            if close[j] > obLevel
+                                closeCount := closeCount + 1
+                        else  // Bearish OB - check closes below
+                            if close[j] < obLevel
+                                closeCount := closeCount + 1
+
+                    if closeCount >= entryCandleCount
+                        // TREND FILTER: Only long in uptrend, only short in downtrend
+                        if ob.bias == 1 and trendDirection == 1  // Bullish OB + Uptrend
+                            longEntry := true
+                            bullishLevel := ob.low
+                            break
+                        else if ob.bias == -1 and trendDirection == -1  // Bearish OB + Downtrend
+                            shortEntry := true
+                            bearishLevel := ob.high
+                            break
+
+    [longEntry, shortEntry, bullishLevel, bearishLevel]
+
+//---------------------------------------------------------------------------------------------------------------------}
+// MAIN LOGIC
+//---------------------------------------------------------------------------------------------------------------------{
+// Get Higher Timeframe EMA
+higherEMA := getHigherEMA()
+
+// Determine Trend Direction
+if close > higherEMA
+    trendDirection := 1  // Uptrend
+else if close < higherEMA
+    trendDirection := -1  // Downtrend
+else
+    trendDirection := trendDirection[1]  // Keep previous trend
+
+// Detect Order Blocks
+detectOrderBlocks()
+
+// Confirm Order Blocks
+confirmOrderBlocks()
+
+// Check Entry with All Filters
+[longEntry, shortEntry, bullishLevel, bearishLevel] = checkEntry()
+
+// Update OB levels
+if longEntry
+    currentBullishOBLevel := bullishLevel
+    bullishOBConfirmed := true
+else
+    bullishOBConfirmed := false
+
+if shortEntry
+    currentBearishOBLevel := bearishLevel
+    bearishOBConfirmed := true
+else
+    bearishOBConfirmed := false
+
+// Calculate ATR-based SL and TP
+float atrValue = ta.atr(atrLength)
+float longSL = currentBullishOBLevel - (atrValue * atrMultiplier)
+float longTP = close + (atrValue * atrMultiplier * riskReward)
+
+float shortSL = currentBearishOBLevel + (atrValue * atrMultiplier)
+float shortTP = close - (atrValue * atrMultiplier * riskReward)
+
+// Execute Trades
+if longEntry and strategy.position_size == 0
+    strategy.entry('Long', strategy.long)
+    strategy.exit('Long Exit', 'Long', stop=longSL, limit=longTP)
+
+if shortEntry and strategy.position_size == 0
+    strategy.entry('Short', strategy.short)
+    strategy.exit('Short Exit', 'Short', stop=shortSL, limit=shortTP)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// PLOTS & VISUALS
+//---------------------------------------------------------------------------------------------------------------------{
+// Plot Higher Timeframe EMA
+plot(higherEMA, title='Higher TF EMA', color=emaColor, linewidth=2)
+
+// Plot trend background
+bgcolor(trendDirection == 1 ? trendUpColor : trendDirection == -1 ? trendDownColor : na, title='Trend Background')
+
+// Plot entry signals
+plotshape(longEntry, title='Long Entry', style=shape.triangleup, location=location.belowbar, color=color.green, size=size.small)
+plotshape(shortEntry, title='Short Entry', style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small)
+
+// Plot SL and TP levels
+plot(strategy.position_size > 0 ? longSL : na, title='Long SL', color=color.red, style=plot.style_linebr)
+plot(strategy.position_size > 0 ? longTP : na, title='Long TP', color=color.green, style=plot.style_linebr)
+plot(strategy.position_size < 0 ? shortSL : na, title='Short SL', color=color.red, style=plot.style_linebr)
+plot(strategy.position_size < 0 ? shortTP : na, title='Short TP', color=color.green, style=plot.style_linebr)
+
+// Trend label
+var label trendLabel = label.new(na, na, text='', color=color.new(color.black, 70), textcolor=color.white, style=label.style_label_down, size=size.small)
+
+if barstate.islast
+    string trendText = trendDirection == 1 ? '▲ UPTREND' : trendDirection == -1 ? '▼ DOWNTREND' : '◄ NEUTRAL'
+    color trendColor = trendDirection == 1 ? color.green : trendDirection == -1 ? color.red : color.gray
+
+    label.set_point(trendLabel, chart.point.new(time, na, higherEMA))
+    label.set_text(trendLabel, trendText)
+    label.set_textcolor(trendLabel, trendColor)
+
+// Info table
+var table infoTable = table.new(position.top_right, 2, 6, bgcolor=color.new(color.black, 80), border_width=1)
+
+if barstate.islast
+    bool volumeOK = checkVolumeFilter()
+    float rsiValue = ta.rsi(close, rsiLength)
+    float atrValue = ta.atr(atrLength)
+
+    table.cell(infoTable, 0, 0, 'Trend', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 0, trendDirection == 1 ? 'UP' : trendDirection == -1 ? 'DOWN' : 'NEUTRAL', text_color=trendDirection == 1 ? color.green : trendDirection == -1 ? color.red : color.gray, text_size=size.small)
+
+    table.cell(infoTable, 0, 1, 'EMA(' + str.tostring(emaLength) + ')', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 1, str.tostring(higherEMA, '#.##'), text_color=emaColor, text_size=size.small)
+
+    table.cell(infoTable, 0, 2, 'RSI', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 2, str.tostring(rsiValue, '#.#'), text_color=enableRSI ? color.yellow : color.gray, text_size=size.small)
+
+    table.cell(infoTable, 0, 3, 'Volume', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 3, volumeOK ? 'OK' : 'LOW', text_color=volumeOK ? color.green : color.red, text_size=size.small)
+
+    table.cell(infoTable, 0, 4, 'Bullish OB', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 4, bullishOBConfirmed ? 'READY' : 'None', text_color=bullishOBConfirmed ? color.green : color.gray, text_size=size.small)
+
+    table.cell(infoTable, 0, 5, 'Bearish OB', text_color=color.white, text_size=size.small)
+    table.cell(infoTable, 1, 5, bearishOBConfirmed ? 'READY' : 'None', text_color=bearishOBConfirmed ? color.red : color.gray, text_size=size.small)
+
+//---------------------------------------------------------------------------------------------------------------------}
+// ALERTS
+//---------------------------------------------------------------------------------------------------------------------{
+alertcondition(longEntry, 'Long Entry', 'All Filters Passed - Long Entry')
+alertcondition(shortEntry, 'Short Entry', 'All Filters Passed - Short Entry')
+alertcondition(ta.cross(close, higherEMA), 'Trend Change', 'EMA Trend Changed')

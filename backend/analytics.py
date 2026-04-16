@@ -457,6 +457,409 @@ class AnalyticsManager:
             "total_turnover": total_turnover
         }
 
+    def get_comprehensive_portfolio_analysis(self, account_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Comprehensive portfolio analysis with advanced metrics
+
+        Calculates:
+        - Risk metrics: Sharpe ratio, Sortino ratio, Maximum Drawdown, VaR
+        - Efficiency metrics: Information ratio, Beta, Alpha
+        - Diversification: HHI index, sector concentration
+        - Performance: Win rate, Average win/loss, Profit factor
+        - Portfolio health score
+
+        Args:
+            account_id: Filter by account ID (optional)
+
+        Returns:
+            Dict with comprehensive portfolio analysis
+        """
+        # Get holdings and positions
+        holdings_query = self.db.query(Holding)
+        if account_id:
+            holdings_query = holdings_query.filter(Holding.account_id == account_id)
+        holdings = holdings_query.all()
+
+        positions_query = self.db.query(Position)
+        if account_id:
+            positions_query = positions_query.filter(Position.account_id == account_id)
+        positions = positions_query.all()
+
+        # Get historical data for advanced metrics
+        cutoff_date = datetime.utcnow() - timedelta(days=365)
+        snapshots = self.db.query(PortfolioSnapshot).filter(
+            PortfolioSnapshot.recorded_at >= cutoff_date
+        )
+        if account_id:
+            snapshots = snapshots.filter(PortfolioSnapshot.account_id == account_id)
+        snapshots = snapshots.order_by(PortfolioSnapshot.recorded_t.asc()).all()
+
+        # Basic portfolio values
+        total_value = sum(h.current_value for h in holdings)
+        investment_value = sum(h.qty * h.avg_price for h in holdings)
+        total_pnl = sum(h.pnl for h in holdings) + sum(p.pnl for p in positions)
+
+        # ==================== RISK METRICS ====================
+
+        # Calculate daily returns from snapshots
+        daily_returns = []
+        for i in range(1, len(snapshots)):
+            if snapshots[i - 1].total_value > 0:
+                daily_return = (snapshots[i].total_value - snapshots[i - 1].total_value) / snapshots[i - 1].total_value
+                daily_returns.append(daily_return)
+
+        # Sharpe Ratio (assuming 252 trading days, risk-free rate of 6%)
+        risk_free_rate = 0.06 / 252  # Daily risk-free rate
+        sharpe_ratio = 0
+        if daily_returns:
+            avg_return = sum(daily_returns) / len(daily_returns)
+            std_dev = (sum((r - avg_return) ** 2 for r in daily_returns) / len(daily_returns)) ** 0.5
+            sharpe_ratio = ((avg_return - risk_free_rate) / std_dev) * (252 ** 0.5) if std_dev > 0 else 0
+
+        # Sortino Ratio (downside deviation)
+        sortino_ratio = 0
+        if daily_returns:
+            avg_return = sum(daily_returns) / len(daily_returns)
+            downside_returns = [r for r in daily_returns if r < 0]
+            downside_dev = (sum(r ** 2 for r in downside_returns) / len(downside_returns)) ** 0.5 if downside_returns else 0
+            sortino_ratio = ((avg_return - risk_free_rate) / downside_dev) * (252 ** 0.5) if downside_dev > 0 else 0
+
+        # Maximum Drawdown
+        max_drawdown = 0
+        max_drawdown_date = None
+        peak_value = 0
+        for s in snapshots:
+            if s.total_value > peak_value:
+                peak_value = s.total_value
+            drawdown = (peak_value - s.total_value) / peak_value if peak_value > 0 else 0
+            if drawdown > max_drawdown:
+                max_drawdown = drawdown
+                max_drawdown_date = s.recorded_at.isoformat()
+
+        # Value at Risk (VaR) - 95% confidence
+        var_95 = 0
+        if daily_returns:
+            sorted_returns = sorted(daily_returns)
+            var_index = int(len(sorted_returns) * 0.05)
+            var_95 = abs(sorted_returns[var_index]) if var_index < len(sorted_returns) else 0
+
+        # ==================== EFFICIENCY METRICS ====================
+
+        # Information Ratio (tracking error against benchmark)
+        # Using NIFTY 50 as proxy benchmark (assuming 12% annual return)
+        benchmark_return = 0.12 / 252
+        tracking_error = 0
+        information_ratio = 0
+        if daily_returns:
+            excess_returns = [r - benchmark_return for r in daily_returns]
+            avg_excess = sum(excess_returns) / len(excess_returns)
+            tracking_error = (sum((er - avg_excess) ** 2 for er in excess_returns) / len(excess_returns)) ** 0.5
+            information_ratio = (avg_excess / tracking_error) * (252 ** 0.5) if tracking_error > 0 else 0
+
+        # Beta (sensitivity to market)
+        beta = 1.0  # Default to 1.0
+        alpha = 0
+        if len(daily_returns) > 30:
+            # Calculate covariance with market (simplified)
+            market_returns = [benchmark_return] * len(daily_returns)
+            avg_portfolio = sum(daily_returns) / len(daily_returns)
+            avg_market = sum(market_returns) / len(market_returns)
+
+            covariance = sum((d - avg_portfolio) * (m - avg_market) for d, m in zip(daily_returns, market_returns)) / len(daily_returns)
+            market_variance = sum((m - avg_market) ** 2 for m in market_returns) / len(market_returns)
+
+            beta = covariance / market_variance if market_variance > 0 else 1.0
+            alpha = (avg_portfolio - risk_free_rate) - beta * (benchmark_return - risk_free_rate)
+
+        # ==================== DIVERSIFICATION METRICS ====================
+
+        # Herfindahl-Hirschman Index (HHI) for concentration
+        hhi = 0
+        if total_value > 0 and holdings:
+            for h in holdings:
+                weight = h.current_value / total_value
+                hhi += weight ** 2
+            hhi *= 10000  # Scale to 0-10000 range
+
+        # Effective number of stocks (inverse of HHI)
+        effective_stocks = 1 / hhi * 10000 if hhi > 0 else 0
+
+        # Sector concentration
+        sector_mapping = {
+            "RELIANCE": "Energy", "TCS": "IT", "INFY": "IT", "HDFCBANK": "Banking",
+            "ICICIBANK": "Banking", "SBIN": "Banking", "HINDUNILVR": "FMCG",
+            "ITC": "FMCG", "TATAMOTORS": "Auto", "MARUTI": "Auto",
+            "BAJFINANCE": "Finance", "AXISBANK": "Banking", "KOTAKBANK": "Banking",
+            "LT": "Infrastructure", "WIPRO": "IT", "TECHM": "IT",
+        }
+
+        sector_weights = {}
+        for h in holdings:
+            sector = sector_mapping.get(h.stock, "Others")
+            if sector not in sector_weights:
+                sector_weights[sector] = 0
+            sector_weights[sector] += h.current_value / total_value if total_value > 0 else 0
+
+        sector_hhi = sum(w ** 2 for w in sector_weights.values()) * 10000
+
+        # ==================== PERFORMANCE METRICS ====================
+
+        # Win/Loss analysis
+        gainers = [h for h in holdings if h.pnl > 0]
+        losers = [h for h in holdings if h.pnl < 0]
+
+        win_rate = len(gainers) / len(holdings) * 100 if holdings else 0
+
+        avg_win = sum(h.pnl for h in gainers) / len(gainers) if gainers else 0
+        avg_loss = sum(h.pnl for h in losers) / len(losers) if losers else 0
+
+        # Profit Factor
+        total_gains = sum(h.pnl for h in gainers)
+        total_losses = abs(sum(h.pnl for h in losers))
+        profit_factor = total_gains / total_losses if total_losses > 0 else float('inf') if total_gains > 0 else 0
+
+        # ==================== PORTFOLIO HEALTH SCORE ====================
+
+        # Calculate health score (0-100)
+        health_components = {
+            "diversification": min(100, effective_stocks * 10),  # More stocks = better
+            "risk_adjusted_return": min(100, (sharpe_ratio + 1) * 50),  # Sharpe > 0 is good
+            "drawdown_control": max(0, 100 - max_drawdown * 100),  # Lower drawdown = better
+            "win_rate": win_rate,
+            "profit_factor": min(100, profit_factor * 20)  # PF > 2 is excellent
+        }
+
+        health_score = sum(health_components.values()) / len(health_components)
+
+        # ==================== RECOMMENDATIONS ====================
+
+        recommendations = []
+        if hhi > 2500:
+            recommendations.append({
+                "type": "warning",
+                "message": f"High concentration risk detected (HHI: {hhi:.0f}). Consider diversifying across more stocks."
+            })
+        if max_drawdown > 0.20:
+            recommendations.append({
+                "type": "warning",
+                "message": f"Maximum drawdown of {max_drawdown*100:.1f}% is high. Review risk management strategy."
+            })
+        if win_rate < 40:
+            recommendations.append({
+                "type": "info",
+                "message": f"Win rate is {win_rate:.1f}%. Consider reviewing entry/exit criteria."
+            })
+        if profit_factor < 1:
+            recommendations.append({
+                "type": "warning",
+                "message": f"Profit factor is {profit_factor:.2f}. Losses exceed gains - review position sizing."
+            })
+        if sharpe_ratio < 0.5:
+            recommendations.append({
+                "type": "info",
+                "message": f"Sharpe ratio is {sharpe_ratio:.2f}. Consider improving risk-adjusted returns."
+            })
+        if not recommendations:
+            recommendations.append({
+                "type": "success",
+                "message": "Portfolio metrics look healthy!"
+            })
+
+        return {
+            "summary": {
+                "total_value": total_value,
+                "investment_value": investment_value,
+                "total_pnl": total_pnl,
+                "pnl_percent": (total_pnl / investment_value * 100) if investment_value > 0 else 0,
+                "holdings_count": len(holdings),
+                "positions_count": len(positions),
+                "health_score": round(health_score, 1),
+                "health_rating": self._get_health_rating(health_score)
+            },
+            "risk_metrics": {
+                "sharpe_ratio": round(sharpe_ratio, 3),
+                "sortino_ratio": round(sortino_ratio, 3),
+                "max_drawdown": round(max_drawdown * 100, 2),
+                "max_drawdown_date": max_drawdown_date,
+                "var_95": round(var_95 * 100, 2),
+                "beta": round(beta, 2),
+                "tracking_error": round(tracking_error * (252 ** 0.5), 3)
+            },
+            "efficiency_metrics": {
+                "information_ratio": round(information_ratio, 3),
+                "alpha": round(alpha * 252 * 100, 2),  # Annualized alpha in %
+                "beta": round(beta, 2)
+            },
+            "diversification": {
+                "hhi": round(hhi, 0),
+                "effective_stocks": round(effective_stocks, 1),
+                "sector_hhi": round(sector_hhi, 0),
+                "sector_breakdown": [
+                    {"sector": s, "weight": round(w * 100, 2)}
+                    for s, w in sorted(sector_weights.items(), key=lambda x: x[1], reverse=True)
+                ]
+            },
+            "performance": {
+                "win_rate": round(win_rate, 1),
+                "avg_win": round(avg_win, 2),
+                "avg_loss": round(avg_loss, 2),
+                "profit_factor": round(profit_factor, 2),
+                "gainers_count": len(gainers),
+                "losers_count": len(losers)
+            },
+            "health_components": {k: round(v, 1) for k, v in health_components.items()},
+            "recommendations": recommendations,
+            "analysis_date": datetime.utcnow().isoformat()
+        }
+
+    def _get_health_rating(self, score: float) -> str:
+        """Get health rating based on score"""
+        if score >= 80:
+            return "Excellent"
+        elif score >= 60:
+            return "Good"
+        elif score >= 40:
+            return "Fair"
+        else:
+            return "Poor"
+
+    def get_portfolio_correlation_matrix(self, account_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Calculate correlation matrix for portfolio holdings
+
+        Args:
+            account_id: Filter by account ID (optional)
+
+        Returns:
+            Dict with correlation matrix data
+        """
+        holdings_query = self.db.query(Holding)
+        if account_id:
+            holdings_query = holdings_query.filter(Holding.account_id == account_id)
+        holdings = holdings_query.all()
+
+        if len(holdings) < 2:
+            return {
+                "message": "Need at least 2 holdings for correlation analysis",
+                "matrix": []
+            }
+
+        # Get historical returns for each stock
+        cutoff_date = datetime.utcnow() - timedelta(days=90)
+        stock_returns = {}
+
+        for h in holdings:
+            # Get snapshots for this stock (simplified - using portfolio snapshots)
+            # In production, you'd have individual stock price history
+            stock_returns[h.stock] = []
+
+        # For now, return a placeholder correlation matrix
+        # In production, this would calculate actual correlations from price history
+        stocks = [h.stock for h in holdings]
+        matrix = []
+
+        for i, stock1 in enumerate(stocks):
+            row = {"stock": stock1, "correlations": []}
+            for j, stock2 in enumerate(stocks):
+                if i == j:
+                    correlation = 1.0
+                else:
+                    # Placeholder - would calculate from actual returns
+                    correlation = 0.0
+                row["correlations"].append({
+                    "stock": stock2,
+                    "correlation": correlation
+                })
+            matrix.append(row)
+
+        return {
+            "stocks": stocks,
+            "matrix": matrix,
+            "note": "Correlation matrix requires individual stock price history"
+        }
+
+    def get_portfolio_attribution(self, account_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Analyze portfolio performance attribution by stock and sector
+
+        Args:
+            account_id: Filter by account ID (optional)
+
+        Returns:
+            Dict with performance attribution data
+        """
+        holdings_query = self.db.query(Holding)
+        if account_id:
+            holdings_query = holdings_query.filter(Holding.account_id == account_id)
+        holdings = holdings_query.all()
+
+        total_value = sum(h.current_value for h in holdings)
+        total_pnl = sum(h.pnl for h in holdings)
+
+        # Stock-level attribution
+        stock_attribution = []
+        for h in holdings:
+            contribution = (h.pnl / total_pnl * 100) if total_pnl != 0 else 0
+            weight = (h.current_value / total_value * 100) if total_value > 0 else 0
+
+            stock_attribution.append({
+                "stock": h.stock,
+                "weight": round(weight, 2),
+                "pnl": round(h.pnl, 2),
+                "pnl_percent": round(h.pnl_percent, 2),
+                "contribution_to_total": round(contribution, 2),
+                "current_value": round(h.current_value, 2)
+            })
+
+        # Sort by contribution
+        stock_attribution.sort(key=lambda x: abs(x["contribution_to_total"]), reverse=True)
+
+        # Sector-level attribution
+        sector_mapping = {
+            "RELIANCE": "Energy", "TCS": "IT", "INFY": "IT", "HDFCBANK": "Banking",
+            "ICICIBANK": "Banking", "SBIN": "Banking", "HINDUNILVR": "FMCG",
+            "ITC": "FMCG", "TATAMOTORS": "Auto", "MARUTI": "Auto",
+            "BAJFINANCE": "Finance", "AXISBANK": "Banking", "KOTAKBANK": "Banking",
+            "LT": "Infrastructure", "WIPRO": "IT", "TECHM": "IT",
+        }
+
+        sector_attribution = {}
+        for h in holdings:
+            sector = sector_mapping.get(h.stock, "Others")
+            if sector not in sector_attribution:
+                sector_attribution[sector] = {
+                    "value": 0,
+                    "pnl": 0,
+                    "count": 0
+                }
+            sector_attribution[sector]["value"] += h.current_value
+            sector_attribution[sector]["pnl"] += h.pnl
+            sector_attribution[sector]["count"] += 1
+
+        sector_list = []
+        for sector, data in sector_attribution.items():
+            weight = (data["value"] / total_value * 100) if total_value > 0 else 0
+            contribution = (data["pnl"] / total_pnl * 100) if total_pnl != 0 else 0
+
+            sector_list.append({
+                "sector": sector,
+                "weight": round(weight, 2),
+                "pnl": round(data["pnl"], 2),
+                "contribution_to_total": round(contribution, 2),
+                "stock_count": data["count"]
+            })
+
+        sector_list.sort(key=lambda x: abs(x["contribution_to_total"]), reverse=True)
+
+        return {
+            "total_value": total_value,
+            "total_pnl": total_pnl,
+            "stock_attribution": stock_attribution,
+            "sector_attribution": sector_list,
+            "top_contributors": stock_attribution[:5],
+            "bottom_contributors": stock_attribution[-5:] if len(stock_attribution) > 5 else []
+        }
+
 
 if __name__ == "__main__":
     # Test analytics
