@@ -7,6 +7,8 @@ const navItems = [
   { path: '/orders', icon: '📋', label: 'Orders', key: 'orders' },
   { path: '/gtt', icon: '⚡', label: 'GTT Orders', key: 'gtt' },
   { path: '/positions', icon: '🎯', label: 'Positions', key: 'positions' },
+  { path: '/alerts', icon: '🔔', label: 'Alerts', key: 'alerts' },
+  { path: '/analytics', icon: '🧮', label: 'Analytics', key: 'analytics' },
   { path: '/settings', icon: '⚙️', label: 'Settings', key: 'settings' }
 ];
 
