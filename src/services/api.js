@@ -605,6 +605,136 @@ export async function importGTTFromExcel(file, accountId = null, allAccounts = f
   }
 }
 
+// ==================== PRICE ALERTS ====================
+
+export async function getPriceAlerts(accountId = null, status = 'ACTIVE') {
+  try {
+    let url = `/price-alerts?status=${status}`;
+    if (accountId) url += `&account_id=${accountId}`;
+    return await apiRequest(url);
+  } catch {
+    return [];
+  }
+}
+
+export async function getPriceAlertSummary(accountId = null) {
+  try {
+    let url = `/price-alerts/summary`;
+    if (accountId) url += `?account_id=${accountId}`;
+    return await apiRequest(url);
+  } catch {
+    return { total: 0, active: 0, triggered: 0, completed: 0 };
+  }
+}
+
+export async function createPriceAlert(accountId, alertData) {
+  return await apiRequest(`/price-alerts?account_id=${accountId}`, {
+    method: 'POST',
+    body: JSON.stringify(alertData),
+  });
+}
+
+export async function updatePriceAlert(alertId, alertData) {
+  return await apiRequest(`/price-alerts/${alertId}`, {
+    method: 'PUT',
+    body: JSON.stringify(alertData),
+  });
+}
+
+export async function deletePriceAlert(alertId) {
+  return await apiRequest(`/price-alerts/${alertId}`, {
+    method: 'DELETE',
+  });
+}
+
+// ==================== ANALYTICS ====================
+
+/**
+ * Get portfolio overview
+ * @returns {Promise<Object>} - Portfolio overview data
+ */
+export async function getPortfolioOverview() {
+  try {
+    return await apiRequest('/analytics/overview');
+  } catch {
+    return { total_value: 0, investment_value: 0, total_pnl: 0, overall_pnl_percent: 0, holdings_count: 0, positions_count: 0, accounts_count: 0 };
+  }
+}
+
+/**
+ * Get P&L breakdown (top gainers, losers, net pnl)
+ * @returns {Promise<Object>}
+ */
+export async function getPnLBreakdown() {
+  try {
+    return await apiRequest('/analytics/pnl-breakdown');
+  } catch {
+    return { total_gains: 0, total_losses: 0, net_pnl: 0, gainers_count: 0, losers_count: 0, top_gainers: [], top_losers: [] };
+  }
+}
+
+/**
+ * Get sector allocation analysis
+ * @returns {Promise<Object>}
+ */
+export async function getSectorAnalysis() {
+  try {
+    return await apiRequest('/analytics/sectors');
+  } catch {
+    return { sectors: [], total_value: 0 };
+  }
+}
+
+/**
+ * Get risk metrics
+ * @returns {Promise<Object>}
+ */
+export async function getRiskMetrics() {
+  try {
+    return await apiRequest('/analytics/risk');
+  } catch {
+    return { concentration_risk: 0, max_single_stock_exposure: 0, diversification_score: 0, loss_making_stocks: 0, loss_making_percentage: 0, total_stocks: 0 };
+  }
+}
+
+/**
+ * Get account comparison data
+ * @returns {Promise<Array>}
+ */
+export async function getAccountComparison() {
+  try {
+    return await apiRequest('/analytics/account-comparison');
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get performance summary for a period
+ * @param {number} days - Number of days
+ * @returns {Promise<Object>}
+ */
+export async function getPerformanceSummary(days = 30) {
+  try {
+    return await apiRequest(`/analytics/performance?days=${days}`);
+  } catch {
+    return { period_days: days, start_value: 0, end_value: 0, period_return: 0, period_return_percent: 0, best_day: null, worst_day: null };
+  }
+}
+
+/**
+ * Get trading activity summary
+ * @param {number} days - Number of days
+ * @returns {Promise<Object>}
+ */
+export async function getTradingActivity(days = 30) {
+  try {
+    return await apiRequest(`/analytics/trading-activity?days=${days}`);
+  } catch {
+    return { period_days: days, total_orders: 0, buy_orders: 0, sell_orders: 0, completed_orders: 0, rejected_orders: 0, cancelled_orders: 0, buy_turnover: 0, sell_turnover: 0, total_turnover: 0 };
+  }
+}
+
 // ==================== HEALTH ====================
 
 /**

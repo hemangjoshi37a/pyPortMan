@@ -2269,6 +2269,50 @@ def get_instruments(account_id: int, exchange: str = "NSE", db: Session = Depend
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==================== ANALYTICS ====================
+
+@app.get("/analytics/overview")
+def get_portfolio_overview(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get portfolio overview metrics"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_portfolio_overview(account_id)
+
+@app.get("/analytics/pnl-breakdown")
+def get_pnl_breakdown(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get detailed P&L breakdown"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_pnl_breakdown(account_id)
+
+@app.get("/analytics/sectors")
+def get_sector_analysis(db: Session = Depends(get_db)):
+    """Get sector allocation analysis"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_sector_analysis()
+
+@app.get("/analytics/risk")
+def get_risk_metrics(account_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Get risk metrics"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_risk_metrics(account_id)
+
+@app.get("/analytics/account-comparison")
+def get_account_comparison(db: Session = Depends(get_db)):
+    """Get account comparison data"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_account_comparison()
+
+@app.get("/analytics/performance")
+def get_performance_summary(days: int = 30, db: Session = Depends(get_db)):
+    """Get performance summary"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_performance_summary(days)
+
+@app.get("/analytics/trading-activity")
+def get_trading_activity(days: int = 30, db: Session = Depends(get_db)):
+    """Get trading activity"""
+    analytics = AnalyticsManager(db)
+    return analytics.get_trading_activity(days)
+
 # ==================== HEALTH ====================
 
 @app.get("/health")

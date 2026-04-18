@@ -8,6 +8,8 @@ import Orders from './pages/Orders';
 import Positions from './pages/Positions';
 import GTTOrders from './pages/GTTOrders';
 import Settings from './pages/Settings';
+import Analytics from './pages/Analytics';
+import PriceAlerts from './pages/PriceAlerts';
 import './App.css';
 
 function App() {
@@ -27,7 +29,9 @@ function App() {
               <Route path="/orders" element={<Orders />} />
               <Route path="/gtt" element={<GTTOrders />} />
               <Route path="/positions" element={<Positions />} />
+              <Route path="/alerts" element={<PriceAlerts />} />
               <Route path="/settings" element={<Settings />} />
+              <Route path="/analytics" element={<Analytics />} />
             </Routes>
           </div>
         </div>
