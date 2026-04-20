@@ -204,7 +204,9 @@ class one_client_class:
 
     def place_order(self, symbol, quantity, transaction_type, order_type,
                     price=None, trigger_price=None, product='CNC',
-                    exchange='NSE', validity='DAY'):
+                    exchange='NSE', validity='DAY', variety=None,
+                    squareoff=None, stoploss=None, trailing_stoploss=None,
+                    trailing_sell_quantity=None, validity_date=None):
         """
         Place regular market/limit orders for both Zerodha and Angel brokers.
 
@@ -212,12 +214,18 @@ class one_client_class:
             symbol (str): Trading symbol (e.g., 'RELIANCE')
             quantity (int): Order quantity
             transaction_type (str): 'BUY' or 'SELL'
-            order_type (str): 'MARKET' or 'LIMIT'
+            order_type (str): 'MARKET', 'LIMIT', 'SL', 'SL-M'
             price (float, optional): Limit price (required for LIMIT orders)
             trigger_price (float, optional): Trigger price for SL/SL-M orders
             product (str): Product type - 'CNC', 'MIS', 'NRML', 'BO', 'CO'
             exchange (str): Exchange - 'NSE', 'BSE', 'MCX', 'NFO'
-            validity (str): Order validity - 'DAY', 'IOC'
+            validity (str): Order validity - 'DAY', 'IOC', 'GTD'
+            variety (str, optional): Order variety - 'regular', 'amo', 'bo', 'co'
+            squareoff (float, optional): Squareoff points for BO orders
+            stoploss (float, optional): Stoploss points for BO/CO orders
+            trailing_stoploss (float, optional): Trailing stoploss for BO/CO orders
+            trailing_sell_quantity (int, optional): Trailing sell quantity for BO orders
+            validity_date (datetime, optional): Validity date for GTD orders
 
         Returns:
             dict: Order response from broker
@@ -226,19 +234,52 @@ class one_client_class:
             if self.ac_broker == 'zerodha':
                 return self._place_order_zerodha(
                     symbol, quantity, transaction_type, order_type,
-                    price, trigger_price, product, exchange, validity
+                    price, trigger_price, product, exchange, validity,
+                    variety, squareoff, stoploss, trailing_stoploss,
+                    trailing_sell_quantity, validity_date
                 )
             elif self.ac_broker == 'angel':
                 return self._place_order_angel(
                     symbol, quantity, transaction_type, order_type,
-                    price, trigger_price, product, exchange, validity
+                    price, trigger_price, product, exchange, validity,
+                    variety, squareoff, stoploss, trailing_stoploss,
+                    validity_date
                 )
         except Exception as excp:
             print(f'Error placing order: {excp}')
             return None
 
+    def place_amo_order(self, symbol, quantity, transaction_type, order_type,
+                       price=None, trigger_price=None, product='CNC',
+                       exchange='NSE', validity='DAY'):
+        """
+        Place After Market Order (AMO) for both Zerodha and Angel brokers.
+
+        Args:
+            symbol (str): Trading symbol
+            quantity (int): Order quantity
+            transaction_type (str): 'BUY' or 'SELL'
+            order_type (str): 'MARKET', 'LIMIT', 'SL', 'SL-M'
+            price (float, optional): Limit price (required for LIMIT orders)
+            trigger_price (float, optional): Trigger price for SL/SL-M orders
+            product (str): Product type - 'CNC', 'MIS', 'NRML'
+            exchange (str): Exchange - 'NSE', 'BSE', 'MCX', 'NFO'
+            validity (str): Order validity - 'DAY', 'IOC'
+
+        Returns:
+            dict: Order response from broker
+        """
+        return self.place_order(
+            symbol, quantity, transaction_type, order_type,
+            price, trigger_price, product, exchange, validity,
+            variety='amo'
+        )
+
     def _place_order_zerodha(self, symbol, quantity, transaction_type, order_type,
-                             price, trigger_price, product, exchange, validity):
+                             price, trigger_price, product, exchange, validity,
+                             variety=None, squareoff=None, stoploss=None,
+                             trailing_stoploss=None, trailing_sell_quantity=None,
+                             validity_date=None):
         """Place order for Zerodha broker."""
         order_params = {
             'tradingsymbol': symbol,
@@ -250,24 +291,53 @@ class one_client_class:
             'validity': validity
         }
 
+        # Add variety if specified (for BO, CO, AMO orders)
+        if variety:
+            order_params['variety'] = variety
+
         if order_type in ['LIMIT', 'SL'] and price is not None:
             order_params['price'] = price
 
         if order_type in ['SL', 'SL-M'] and trigger_price is not None:
             order_params['trigger_price'] = trigger_price
 
+        # Add bracket order parameters
+        if squareoff is not None:
+            order_params['squareoff'] = squareoff
+        if stoploss is not None:
+            order_params['stoploss'] = stoploss
+        if trailing_stoploss is not None:
+            order_params['trailing_stoploss'] = trailing_stoploss
+        if trailing_sell_quantity is not None:
+            order_params['trailing_sell_quantity'] = trailing_sell_quantity
+
+        # Add validity date for GTD orders
+        if validity_date:
+            order_params['validity_date'] = validity_date.strftime('%Y-%m-%d')
+
         order_id = self.zerodha_user.place_order(order_params)
         print(f'Zerodha Order Placed: {order_id}')
         return {'order_id': order_id, 'status': 'success'}
 
     def _place_order_angel(self, symbol, quantity, transaction_type, order_type,
-                           price, trigger_price, product, exchange, validity):
+                           price, trigger_price, product, exchange, validity,
+                           variety=None, squareoff=None, stoploss=None,
+                           trailing_stoploss=None, validity_date=None):
         """Place order for Angel broker."""
         # Get instrument token for Angel
         instrument_token = self._get_angel_instrument_token(symbol, exchange)
 
+        # Map variety names for Angel
+        variety_map = {
+            'regular': 'NORMAL',
+            'amo': 'AMO',
+            'bo': 'BO',
+            'co': 'CO'
+        }
+        angel_variety = variety_map.get(variety, 'NORMAL')
+
         order_params = {
-            'variety': 'NORMAL',
+            'variety': angel_variety,
             'tradingsymbol': symbol,
             'symboltoken': instrument_token,
             'transactiontype': transaction_type,
@@ -276,13 +346,21 @@ class one_client_class:
             'producttype': product,
             'duration': validity,
             'price': price if price else 0,
-            'squareoff': '0',
-            'stoploss': '0',
+            'squareoff': str(squareoff) if squareoff is not None else '0',
+            'stoploss': str(stoploss) if stoploss is not None else '0',
             'quantity': quantity
         }
 
         if trigger_price:
             order_params['triggerprice'] = trigger_price
+
+        # Add trailing stoploss for Angel
+        if trailing_stoploss is not None:
+            order_params['trailingstoploss'] = str(trailing_stoploss)
+
+        # Add validity date for GTD orders
+        if validity_date:
+            order_params['validitydate'] = validity_date.strftime('%Y-%m-%d')
 
         order_id = self.angel_user.placeOrder(order_params)
         print(f'Angel Order Placed: {order_id}')
@@ -357,7 +435,8 @@ class one_client_class:
             return None
 
     def modify_order(self, order_id, price=None, quantity=None,
-                     trigger_price=None):
+                     trigger_price=None, trailing_stoploss=None,
+                     variety=None):
         """
         Modify an existing order.
 
@@ -366,6 +445,8 @@ class one_client_class:
             price (float, optional): New price
             quantity (int, optional): New quantity
             trigger_price (float, optional): New trigger price
+            trailing_stoploss (float, optional): New trailing stoploss value
+            variety (str, optional): Order variety for modification
 
         Returns:
             dict: Modification response
@@ -379,6 +460,10 @@ class one_client_class:
                     modify_params['quantity'] = quantity
                 if trigger_price is not None:
                     modify_params['trigger_price'] = trigger_price
+                if trailing_stoploss is not None:
+                    modify_params['trailing_stoploss'] = trailing_stoploss
+                if variety is not None:
+                    modify_params['variety'] = variety
 
                 result = self.zerodha_user.modify_order(order_id, modify_params)
                 print(f'Zerodha Order Modified: {order_id}')
@@ -386,7 +471,7 @@ class one_client_class:
 
             elif self.ac_broker == 'angel':
                 modify_params = {
-                    'variety': 'NORMAL',
+                    'variety': variety if variety else 'NORMAL',
                     'orderid': order_id
                 }
                 if price is not None:
@@ -395,6 +480,8 @@ class one_client_class:
                     modify_params['quantity'] = quantity
                 if trigger_price is not None:
                     modify_params['triggerprice'] = trigger_price
+                if trailing_stoploss is not None:
+                    modify_params['trailingstoploss'] = str(trailing_stoploss)
 
                 result = self.angel_user.modifyOrder(modify_params)
                 print(f'Angel Order Modified: {order_id}')
@@ -403,6 +490,19 @@ class one_client_class:
         except Exception as excp:
             print(f'Error modifying order: {excp}')
             return None
+
+    def modify_trailing_stoploss(self, order_id, new_trailing_sl):
+        """
+        Modify trailing stop-loss for an existing order.
+
+        Args:
+            order_id (str): Order ID to modify
+            new_trailing_sl (float): New trailing stop-loss value
+
+        Returns:
+            dict: Modification response
+        """
+        return self.modify_order(order_id, trailing_stoploss=new_trailing_sl)
 
     def cancel_all_orders(self):
         """

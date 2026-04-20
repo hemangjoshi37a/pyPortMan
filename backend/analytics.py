@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import func, and_, or_
 
-from models import Account, Holding, Position, PortfolioSnapshot, Order
+from models import Account, Holding, Position, PortfolioSnapshot, Order, GTTOrder
 
 # Configure logging
 logging.basicConfig(
@@ -723,6 +723,179 @@ class AnalyticsManager:
         else:
             return "Poor"
 
+    def get_risk_reward_ratios(self, account_id: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Calculate risk-reward ratios for portfolio positions
+
+        Args:
+            account_id: Filter by account ID (optional)
+
+        Returns:
+            Dict with risk-reward ratio analysis
+        """
+        # Get holdings
+        holdings_query = self.db.query(Holding)
+        if account_id:
+            holdings_query = holdings_query.filter(Holding.account_id == account_id)
+        holdings = holdings_query.all()
+
+        # Get positions
+        positions_query = self.db.query(Position)
+        if account_id:
+            positions_query = positions_query.filter(Position.account_id == account_id)
+        positions = positions_query.all()
+
+        # Get GTT orders for target/stop-loss information
+        gtt_query = self.db.query(GTTOrder)
+        if account_id:
+            gtt_query = gtt_query.filter(GTTOrder.account_id == account_id)
+        gtt_orders = gtt_query.filter(GTTOrder.status == "ACTIVE").all()
+
+        # Create a mapping of stock to GTT target/stop-loss
+        gtt_mapping = {}
+        for gtt in gtt_orders:
+            gtt_mapping[gtt.stock] = {
+                "target_price": gtt.target_price,
+                "sl_price": gtt.sl_price,
+                "buy_price": gtt.buy_price
+            }
+
+        # Calculate per-position risk-reward ratios
+        position_rr = []
+        total_risk = 0
+        total_reward = 0
+
+        for h in holdings:
+            current_price = h.ltp
+            entry_price = h.avg_price
+
+            # Get target and stop-loss from GTT or use defaults
+            gtt_info = gtt_mapping.get(h.stock, {})
+            target_price = gtt_info.get("target_price", entry_price * 1.1)  # Default 10% target
+            sl_price = gtt_info.get("sl_price", entry_price * 0.95)  # Default 5% stop-loss
+
+            # Calculate risk and reward
+            risk_amount = (entry_price - sl_price) * h.qty if sl_price < entry_price else 0
+            reward_amount = (target_price - entry_price) * h.qty if target_price > entry_price else 0
+
+            # Risk-reward ratio
+            rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
+
+            # Current unrealized P&L
+            unrealized_pnl = h.pnl
+
+            position_rr.append({
+                "stock": h.stock,
+                "exchange": h.exchange,
+                "entry_price": round(entry_price, 2),
+                "current_price": round(current_price, 2),
+                "target_price": round(target_price, 2),
+                "stop_loss": round(sl_price, 2),
+                "quantity": h.qty,
+                "risk_amount": round(risk_amount, 2),
+                "reward_amount": round(reward_amount, 2),
+                "risk_reward_ratio": round(rr_ratio, 2),
+                "unrealized_pnl": round(unrealized_pnl, 2),
+                "pnl_percent": round(h.pnl_percent, 2),
+                "distance_to_target_pct": round(((target_price - current_price) / current_price * 100), 2) if current_price > 0 else 0,
+                "distance_to_sl_pct": round(((current_price - sl_price) / current_price * 100), 2) if current_price > 0 else 0
+            })
+
+            total_risk += risk_amount
+            total_reward += reward_amount
+
+        # Calculate for positions (intraday)
+        for p in positions:
+            current_price = p.ltp
+            entry_price = p.avg_price
+
+            # For positions, use a default 2% stop-loss and 4% target
+            target_price = entry_price * 1.04
+            sl_price = entry_price * 0.98
+
+            risk_amount = (entry_price - sl_price) * abs(p.qty) if sl_price < entry_price else 0
+            reward_amount = (target_price - entry_price) * abs(p.qty) if target_price > entry_price else 0
+            rr_ratio = reward_amount / risk_amount if risk_amount > 0 else 0
+
+            position_rr.append({
+                "stock": p.stock,
+                "exchange": p.exchange,
+                "entry_price": round(entry_price, 2),
+                "current_price": round(current_price, 2),
+                "target_price": round(target_price, 2),
+                "stop_loss": round(sl_price, 2),
+                "quantity": abs(p.qty),
+                "risk_amount": round(risk_amount, 2),
+                "reward_amount": round(reward_amount, 2),
+                "risk_reward_ratio": round(rr_ratio, 2),
+                "unrealized_pnl": round(p.unrealized_pnl, 2),
+                "pnl_percent": round(p.pnl_percent, 2),
+                "distance_to_target_pct": round(((target_price - current_price) / current_price * 100), 2) if current_price > 0 else 0,
+                "distance_to_sl_pct": round(((current_price - sl_price) / current_price * 100), 2) if current_price > 0 else 0,
+                "is_position": True
+            })
+
+            total_risk += risk_amount
+            total_reward += reward_amount
+
+        # Portfolio-level risk-reward
+        portfolio_rr = total_reward / total_risk if total_risk > 0 else 0
+
+        # Categorize positions by risk-reward quality
+        excellent_rr = [p for p in position_rr if p["risk_reward_ratio"] >= 2.0]
+        good_rr = [p for p in position_rr if 1.5 <= p["risk_reward_ratio"] < 2.0]
+        fair_rr = [p for p in position_rr if 1.0 <= p["risk_reward_ratio"] < 1.5]
+        poor_rr = [p for p in position_rr if p["risk_reward_ratio"] < 1.0]
+
+        return {
+            "portfolio_risk_reward_ratio": round(portfolio_rr, 2),
+            "total_risk_amount": round(total_risk, 2),
+            "total_reward_amount": round(total_reward, 2),
+            "positions_count": len(position_rr),
+            "positions": position_rr,
+            "summary": {
+                "excellent_rr_count": len(excellent_rr),
+                "good_rr_count": len(good_rr),
+                "fair_rr_count": len(fair_rr),
+                "poor_rr_count": len(poor_rr),
+                "avg_rr_ratio": round(sum(p["risk_reward_ratio"] for p in position_rr) / len(position_rr), 2) if position_rr else 0
+            },
+            "recommendations": self._get_rr_recommendations(portfolio_rr, position_rr)
+        }
+
+    def _get_rr_recommendations(self, portfolio_rr: float, positions: List[Dict]) -> List[Dict[str, Any]]:
+        """Get recommendations based on risk-reward analysis"""
+        recommendations = []
+
+        if portfolio_rr < 1.0:
+            recommendations.append({
+                "type": "warning",
+                "message": f"Portfolio risk-reward ratio ({portfolio_rr:.2f}) is below 1.0. Consider adjusting stop-loss levels or target prices."
+            })
+        elif portfolio_rr < 1.5:
+            recommendations.append({
+                "type": "info",
+                "message": f"Portfolio risk-reward ratio ({portfolio_rr:.2f}) is moderate. Aim for ratio above 2.0 for better risk-adjusted returns."
+            })
+
+        poor_positions = [p for p in positions if p["risk_reward_ratio"] < 1.0]
+        if poor_positions:
+            stocks = ", ".join([p["stock"] for p in poor_positions[:3]])
+            recommendations.append({
+                "type": "warning",
+                "message": f"{len(poor_positions)} positions have poor risk-reward ratios (< 1.0): {stocks}{'...' if len(poor_positions) > 3 else ''}"
+            })
+
+        near_sl_positions = [p for p in positions if p["distance_to_sl_pct"] < 2]
+        if near_sl_positions:
+            stocks = ", ".join([p["stock"] for p in near_sl_positions[:3]])
+            recommendations.append({
+                "type": "urgent",
+                "message": f"{len(near_sl_positions)} positions are within 2% of stop-loss: {stocks}{'...' if len(near_sl_positions) > 3 else ''}"
+            })
+
+        return recommendations
+
     def get_portfolio_correlation_matrix(self, account_id: Optional[int] = None) -> Dict[str, Any]:
         """
         Calculate correlation matrix for portfolio holdings
@@ -858,6 +1031,166 @@ class AnalyticsManager:
             "sector_attribution": sector_list,
             "top_contributors": stock_attribution[:5],
             "bottom_contributors": stock_attribution[-5:] if len(stock_attribution) > 5 else []
+        }
+
+    def get_drawdown_analysis(self, account_id: Optional[int] = None,
+                             lookback_days: int = 365) -> Dict[str, Any]:
+        """
+        Enhanced drawdown analysis with rolling periods, duration tracking, and Ulcer Index
+
+        Args:
+            account_id: Filter by account ID (optional)
+            lookback_days: Number of days to analyze (default: 365)
+
+        Returns:
+            Dict with comprehensive drawdown analysis
+        """
+        cutoff_date = datetime.utcnow() - timedelta(days=lookback_days)
+
+        snapshots_query = self.db.query(PortfolioSnapshot).filter(
+            PortfolioSnapshot.recorded_at >= cutoff_date
+        )
+        if account_id:
+            snapshots_query = snapshots_query.filter(PortfolioSnapshot.account_id == account_id)
+        snapshots = snapshots_query.order_by(PortfolioSnapshot.recorded_at.asc()).all()
+
+        if not snapshots:
+            return {
+                "message": "No snapshot data available for drawdown analysis",
+                "lookback_days": lookback_days
+            }
+
+        # Calculate daily returns
+        daily_returns = []
+        for i in range(1, len(snapshots)):
+            if snapshots[i - 1].total_value > 0:
+                daily_return = (snapshots[i].total_value - snapshots[i - 1].total_value) / snapshots[i - 1].total_value
+                daily_returns.append(daily_return)
+
+        # Calculate drawdown series
+        drawdown_series = []
+        peak_value = 0
+        peak_date = None
+        current_drawdown_start = None
+        current_drawdown_duration = 0
+        max_drawdown_duration = 0
+        max_drawdown_duration_date = None
+
+        for i, snapshot in enumerate(snapshots):
+            if snapshot.total_value > peak_value:
+                peak_value = snapshot.total_value
+                peak_date = snapshot.recorded_at
+                current_drawdown_start = None
+                current_drawdown_duration = 0
+            else:
+                drawdown = (peak_value - snapshot.total_value) / peak_value if peak_value > 0 else 0
+                drawdown_series.append({
+                    "date": snapshot.recorded_at.isoformat(),
+                    "value": snapshot.total_value,
+                    "peak": peak_value,
+                    "drawdown": drawdown,
+                    "drawdown_pct": drawdown * 100
+                })
+
+                # Track drawdown duration
+                if drawdown > 0:
+                    if current_drawdown_start is None:
+                        current_drawdown_start = snapshot.recorded_at
+                    current_drawdown_duration = (snapshot.recorded_at - current_drawdown_start).days
+
+                    if current_drawdown_duration > max_drawdown_duration:
+                        max_drawdown_duration = current_drawdown_duration
+                        max_drawdown_duration_date = snapshot.recorded_at.isoformat()
+
+        # Maximum Drawdown
+        max_drawdown = max([d["drawdown"] for d in drawdown_series]) if drawdown_series else 0
+        max_drawdown_date = next((d["date"] for d in drawdown_series if d["drawdown"] == max_drawdown), None)
+
+        # Average Drawdown
+        avg_drawdown = sum(d["drawdown"] for d in drawdown_series) / len(drawdown_series) if drawdown_series else 0
+
+        # Ulcer Index
+        ulcer_index = 0
+        if drawdown_series:
+            squared_drawdowns = sum(d["drawdown"] ** 2 for d in drawdown_series)
+            ulcer_index = (squared_drawdowns / len(drawdown_series)) ** 0.5
+
+        # Rolling drawdown periods
+        rolling_drawdowns = {}
+        periods = [7, 30, 90]  # 7-day, 30-day, 90-day rolling
+
+        for period in periods:
+            if len(drawdown_series) >= period:
+                recent_drawdowns = [d["drawdown"] for d in drawdown_series[-period:]]
+                rolling_drawdowns[f"{period}_day"] = {
+                    "max": max(recent_drawdowns),
+                    "avg": sum(recent_drawdowns) / len(recent_drawdowns),
+                    "current": recent_drawdowns[-1] if recent_drawdowns else 0
+                }
+
+        # Drawdown contribution by position (if we have position-level data)
+        # This would require position-level snapshots, which we don't have
+        # For now, we'll provide a placeholder
+        position_contribution = []
+
+        # Recovery time analysis
+        recovery_times = []
+        in_drawdown = False
+        drawdown_start = None
+        max_dd_in_period = 0
+
+        for i, snapshot in enumerate(snapshots):
+            if i == 0:
+                peak_value = snapshot.total_value
+                continue
+
+            if snapshot.total_value >= peak_value:
+                if in_drawdown and drawdown_start:
+                    recovery_time = (snapshot.recorded_at - drawdown_start).days
+                    recovery_times.append({
+                        "start_date": drawdown_start.isoformat(),
+                        "end_date": snapshot.recorded_at.isoformat(),
+                        "duration_days": recovery_time,
+                        "max_drawdown": max_dd_in_period * 100
+                    })
+                peak_value = snapshot.total_value
+                in_drawdown = False
+                drawdown_start = None
+                max_dd_in_period = 0
+            else:
+                drawdown = (peak_value - snapshot.total_value) / peak_value
+                if drawdown > 0:
+                    if not in_drawdown:
+                        in_drawdown = True
+                        drawdown_start = snapshots[i - 1].recorded_at
+                    max_dd_in_period = max(max_dd_in_period, drawdown)
+
+        avg_recovery_time = sum(r["duration_days"] for r in recovery_times) / len(recovery_times) if recovery_times else 0
+
+        return {
+            "lookback_days": lookback_days,
+            "data_points": len(drawdown_series),
+            "max_drawdown": {
+                "value": round(max_drawdown * 100, 2),
+                "date": max_drawdown_date
+            },
+            "avg_drawdown": round(avg_drawdown * 100, 2),
+            "current_drawdown": round(drawdown_series[-1]["drawdown_pct"], 2) if drawdown_series else 0,
+            "ulcer_index": round(ulcer_index * 100, 2),
+            "max_drawdown_duration_days": max_drawdown_duration,
+            "max_drawdown_duration_date": max_drawdown_duration_date,
+            "avg_recovery_time_days": round(avg_recovery_time, 1),
+            "recovery_periods": len(recovery_times),
+            "rolling_drawdowns": {
+                k: {
+                    "max_pct": round(v["max"] * 100, 2),
+                    "avg_pct": round(v["avg"] * 100, 2),
+                    "current_pct": round(v["current"] * 100, 2)
+                }
+                for k, v in rolling_drawdowns.items()
+            },
+            "drawdown_series": drawdown_series[-30:] if drawdown_series else [],  # Last 30 points
+            "recovery_times": recovery_times[-5:] if recovery_times else []  # Last 5 recoveries
         }
 
 

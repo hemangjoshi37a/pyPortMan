@@ -442,3 +442,142 @@ class WatchlistManager:
                     })
 
         return near_targets
+
+    def check_price_target_alerts(self, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Check watchlist items for price target hits and send alerts
+
+        Args:
+            account_id: Filter by account (None = all accounts)
+
+        Returns:
+            List of triggered alerts
+        """
+        query = self.db.query(Watchlist).filter(
+            and_(
+                Watchlist.is_active == True,
+                Watchlist.current_price > 0
+            )
+        )
+
+        if account_id:
+            query = query.filter(Watchlist.account_id == account_id)
+
+        items = query.all()
+
+        triggered_alerts = []
+
+        for item in items:
+            current_price = item.current_price
+            alerts_triggered = []
+
+            # Check buy target
+            if item.target_buy_price:
+                # Check if price is at or below buy target (for buying)
+                if current_price <= item.target_buy_price:
+                    alerts_triggered.append({
+                        "type": "BUY_TARGET",
+                        "target_price": item.target_buy_price,
+                        "current_price": current_price,
+                        "diff_pct": round(((current_price - item.target_buy_price) / item.target_buy_price) * 100, 2)
+                    })
+
+            # Check sell target
+            if item.target_sell_price:
+                # Check if price is at or above sell target (for selling)
+                if current_price >= item.target_sell_price:
+                    alerts_triggered.append({
+                        "type": "SELL_TARGET",
+                        "target_price": item.target_sell_price,
+                        "current_price": current_price,
+                        "diff_pct": round(((current_price - item.target_sell_price) / item.target_sell_price) * 100, 2)
+                    })
+
+            if alerts_triggered:
+                for alert in alerts_triggered:
+                    triggered_alerts.append({
+                        "watchlist_id": item.id,
+                        "account_id": item.account_id,
+                        "stock": item.stock,
+                        "exchange": item.exchange,
+                        "alert": alert
+                    })
+
+                    # Send notification
+                    self._send_price_target_alert(item, alert)
+
+        return triggered_alerts
+
+    def _send_price_target_alert(self, item: Watchlist, alert: Dict[str, Any]):
+        """Send notification for price target alert"""
+        try:
+            from telegram_alerts import TelegramAlerts
+            from discord_alerts import DiscordAlerts
+
+            alert_type = alert["type"]
+            target_price = alert["target_price"]
+            current_price = alert["current_price"]
+            diff_pct = alert["diff_pct"]
+
+            # Get account name
+            account = self.db.query(Account).filter(Account.id == item.account_id).first()
+            account_name = account.name if account else f"Account {item.account_id}"
+
+            # Format message
+            emoji = "🟢" if alert_type == "BUY_TARGET" else "🔴"
+            action = "Buy" if alert_type == "BUY_TARGET" else "Sell"
+
+            message = f"""{emoji} <b>WATCHLIST TARGET HIT - {account_name}</b>
+
+Stock: {item.stock}
+Target: {action} @ ₹{target_price:.2f}
+Current: ₹{current_price:.2f}
+Difference: {diff_pct:+.2f}%
+
+<b>Action: Review and execute if appropriate</b>
+
+Time: {datetime.now().strftime('%H:%M:%S')}"""
+
+            # Send to Telegram
+            telegram = TelegramAlerts(self.db)
+            telegram._send_alert(f"WATCHLIST_{alert_type}", message)
+
+            # Send to Discord
+            discord = DiscordAlerts(self.db)
+            discord_content = f"{emoji} **WATCHLIST TARGET HIT - {account_name}**\n\n" \
+                            f"Stock: {item.stock}\n" \
+                            f"Target: {action} @ ₹{target_price:.2f}\n" \
+                            f"Current: ₹{current_price:.2f}\n" \
+                            f"Difference: {diff_pct:+.2f}%\n\n" \
+                            f"**Action: Review and execute if appropriate**\n\n" \
+                            f"Time: {datetime.now().strftime('%H:%M:%S')}"
+
+            discord_embed = {
+                "title": f"Watchlist Target Hit - {item.stock}",
+                "color": 0x00ff00 if alert_type == "BUY_TARGET" else 0xff0000,
+                "fields": [
+                    {"name": "Account", "value": account_name, "inline": True},
+                    {"name": "Target Type", "value": action, "inline": True},
+                    {"name": "Target Price", "value": f"₹{target_price:.2f}", "inline": True},
+                    {"name": "Current Price", "value": f"₹{current_price:.2f}", "inline": True},
+                    {"name": "Difference", "value": f"{diff_pct:+.2f}%", "inline": True}
+                ],
+                "timestamp": datetime.utcnow().isoformat()
+            }
+
+            discord._send_alert(f"WATCHLIST_{alert_type}", discord_content, discord_embed)
+
+            # Log to alert history
+            from models import AlertHistory
+            alert_history = AlertHistory(
+                alert_type=f"WATCHLIST_{alert_type}",
+                message=message,
+                sent_at=datetime.utcnow(),
+                success=True
+            )
+            self.db.add(alert_history)
+            self.db.commit()
+
+        except Exception as e:
+            logger.error(f"Error sending price target alert for {item.stock}: {e}")
+            self.db.rollback()

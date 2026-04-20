@@ -183,6 +183,7 @@ class AlertConfig(Base):
     id = Column(Integer, primary_key=True, index=True)
     bot_token = Column(String(255), nullable=True)  # Telegram bot token
     chat_id = Column(String(100), nullable=True)  # Telegram chat ID
+    discord_webhook_url = Column(String(500), nullable=True)  # Discord webhook URL
     gtt_alerts_enabled = Column(Boolean, default=True)  # GTT triggered alerts
     loss_alerts_enabled = Column(Boolean, default=True)  # Big loss alerts
     daily_summary_enabled = Column(Boolean, default=True)  # Daily summary alerts
@@ -263,3 +264,80 @@ class Watchlist(Base):
 
     def __repr__(self):
         return f"<Watchlist(id={self.id}, stock='{self.stock}', category='{self.category}')>"
+
+
+class PnlThresholdAlert(Base):
+    """P&L threshold alerts for portfolio monitoring"""
+    __tablename__ = "pnl_threshold_alerts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)
+    stock = Column(String(50), nullable=True, index=True)  # Null = all stocks
+    profit_threshold_pct = Column(Float, nullable=True)  # Profit threshold percentage
+    loss_threshold_pct = Column(Float, nullable=True)  # Loss threshold percentage
+    enabled = Column(Boolean, default=True)
+    alert_type = Column(String(20), default="BOTH")  # PROFIT, LOSS, or BOTH
+    repeat = Column(Boolean, default=False)  # Repeat alert if threshold crossed again
+    last_triggered_at = Column(DateTime, nullable=True)
+    trigger_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    account = relationship("Account")
+
+    def __repr__(self):
+        return f"<PnlThresholdAlert(id={self.id}, stock='{self.stock}', profit_threshold={self.profit_threshold_pct}, loss_threshold={self.loss_threshold_pct})>"
+
+
+class TechnicalAlertRule(Base):
+    """Technical indicator alert rules"""
+    __tablename__ = "technical_alert_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    account_id = Column(Integer, ForeignKey("accounts.id"), nullable=True, index=True)
+    stock = Column(String(50), nullable=True, index=True)  # Null = all stocks
+    exchange = Column(String(20), default="NSE")
+    enabled = Column(Boolean, default=True)
+
+    # RSI settings
+    rsi_enabled = Column(Boolean, default=False)
+    rsi_overbought = Column(Float, default=70.0)
+    rsi_oversold = Column(Float, default=30.0)
+    rsi_period = Column(Integer, default=14)
+
+    # MACD settings
+    macd_enabled = Column(Boolean, default=False)
+    macd_fast_period = Column(Integer, default=12)
+    macd_slow_period = Column(Integer, default=26)
+    macd_signal_period = Column(Integer, default=9)
+
+    # Moving Average settings
+    ma_crossover_enabled = Column(Boolean, default=False)
+    ma_fast_period = Column(Integer, default=10)
+    ma_slow_period = Column(Integer, default=20)
+
+    # Bollinger Bands settings
+    bb_enabled = Column(Boolean, default=False)
+    bb_period = Column(Integer, default=20)
+    bb_std_dev = Column(Float, default=2.0)
+
+    # Volume settings
+    volume_enabled = Column(Boolean, default=False)
+    volume_avg_period = Column(Integer, default=20)
+    volume_multiplier = Column(Float, default=2.0)
+
+    # Notification settings
+    notification_channels = Column(String(100), default="telegram")  # telegram, email, sms, webhook (comma-separated)
+
+    last_checked_at = Column(DateTime, nullable=True)
+    last_triggered_at = Column(DateTime, nullable=True)
+    trigger_count = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship
+    account = relationship("Account")
+
+    def __repr__(self):
+        return f"<TechnicalAlertRule(id={self.id}, stock='{self.stock}', enabled={self.enabled})>"

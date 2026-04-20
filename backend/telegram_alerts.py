@@ -466,6 +466,203 @@ Time: {datetime.now().strftime('%H:%M:%S')}"""
             logger.error(f"Error checking big losses: {e}")
             return []
 
+    def check_pnl_thresholds(self) -> List[Dict[str, Any]]:
+        """
+        Check all holdings and positions for P&L threshold alerts (both profit and loss)
+
+        Returns:
+            List of stocks that triggered P&L thresholds
+        """
+        try:
+            from models import Holding, Position, Account, PnlThresholdAlert
+
+            # Get active P&L threshold alerts
+            threshold_alerts = self.db.query(PnlThresholdAlert).filter(
+                PnlThresholdAlert.enabled == True
+            ).all()
+
+            if not threshold_alerts:
+                return []
+
+            triggered_alerts = []
+
+            # Check holdings
+            for alert in threshold_alerts:
+                if alert.account_id:
+                    holdings = self.db.query(Holding).filter(
+                        Holding.account_id == alert.account_id
+                    ).all()
+                else:
+                    holdings = self.db.query(Holding).join(Account).filter(
+                        Account.is_active == True
+                    ).all()
+
+                for holding in holdings:
+                    # Check if this stock matches the alert (or if alert is for all stocks)
+                    if alert.stock and holding.stock != alert.stock:
+                        continue
+
+                    # Check profit threshold
+                    if alert.profit_threshold_pct and holding.pnl_percent >= alert.profit_threshold_pct:
+                        self.send_profit_threshold_alert(
+                            account_id=holding.account_id,
+                            account_name=holding.account.name,
+                            stock=holding.stock,
+                            profit_pct=holding.pnl_percent,
+                            profit_amount=holding.pnl,
+                            current_price=holding.ltp,
+                            avg_price=holding.avg_price
+                        )
+                        triggered_alerts.append({
+                            "alert_id": alert.id,
+                            "type": "PROFIT",
+                            "stock": holding.stock,
+                            "pnl_pct": holding.pnl_percent,
+                            "pnl_amount": holding.pnl
+                        })
+
+                    # Check loss threshold
+                    if alert.loss_threshold_pct and holding.pnl_percent <= -alert.loss_threshold_pct:
+                        self.send_loss_threshold_alert(
+                            account_id=holding.account_id,
+                            account_name=holding.account.name,
+                            stock=holding.stock,
+                            loss_pct=holding.pnl_percent,
+                            loss_amount=holding.pnl,
+                            current_price=holding.ltp,
+                            avg_price=holding.avg_price
+                        )
+                        triggered_alerts.append({
+                            "alert_id": alert.id,
+                            "type": "LOSS",
+                            "stock": holding.stock,
+                            "pnl_pct": holding.pnl_percent,
+                            "pnl_amount": holding.pnl
+                        })
+
+            return triggered_alerts
+
+        except Exception as e:
+            logger.error(f"Error checking P&L thresholds: {e}")
+            return []
+
+    def send_profit_threshold_alert(
+        self,
+        account_id: int,
+        account_name: str,
+        stock: str,
+        profit_pct: float,
+        profit_amount: float,
+        current_price: float,
+        avg_price: float
+    ) -> bool:
+        """
+        Send alert when stock hits profit threshold
+
+        Args:
+            account_id: Account ID
+            account_name: Account name
+            stock: Stock symbol
+            profit_pct: Profit percentage
+            profit_amount: Profit amount in rupees
+            current_price: Current price
+            avg_price: Average buy price
+
+        Returns:
+            True if successful, False otherwise
+        """
+        config = self._get_config()
+        if not config or not config.get("loss_alerts_enabled"):
+            return False
+
+        message = f"""🎉 <b>PROFIT TARGET HIT - {account_name}</b>
+
+Stock: {stock}
+Profit: +{profit_pct:.2f}% (+₹{profit_amount:.2f})
+Current: ₹{current_price:.2f} | Avg: ₹{avg_price:.2f}
+
+<b>Action: Consider booking profits or trailing stop-loss</b>
+
+Time: {datetime.now().strftime('%H:%M:%S')}"""
+
+        return self._send_alert("PROFIT_THRESHOLD", message)
+
+    def send_loss_threshold_alert(
+        self,
+        account_id: int,
+        account_name: str,
+        stock: str,
+        loss_pct: float,
+        loss_amount: float,
+        current_price: float,
+        avg_price: float
+    ) -> bool:
+        """
+        Send alert when stock hits loss threshold
+
+        Args:
+            account_id: Account ID
+            account_name: Account name
+            stock: Stock symbol
+            loss_pct: Loss percentage
+            loss_amount: Loss amount in rupees
+            current_price: Current price
+            avg_price: Average buy price
+
+        Returns:
+            True if successful, False otherwise
+        """
+        config = self._get_config()
+        if not config or not config.get("loss_alerts_enabled"):
+            return False
+
+        message = f"""📉 <b>LOSS THRESHOLD HIT - {account_name}</b>
+
+Stock: {stock}
+Loss: {loss_pct:.2f}% (₹{loss_amount:.2f})
+Current: ₹{current_price:.2f} | Avg: ₹{avg_price:.2f}
+
+<b>Action: Review position - consider stop-loss or exit</b>
+
+Time: {datetime.now().strftime('%H:%M:%S')}"""
+
+        return self._send_alert("LOSS_THRESHOLD", message)
+
+    def send_portfolio_pnl_alert(
+        self,
+        total_pnl: float,
+        total_pnl_pct: float,
+        threshold_type: str,
+        threshold_value: float
+    ) -> bool:
+        """
+        Send alert when portfolio P&L crosses threshold
+
+        Args:
+            total_pnl: Total portfolio P&L
+            total_pnl_pct: Total portfolio P&L percentage
+            threshold_type: 'PROFIT' or 'LOSS'
+            threshold_value: Threshold value that was crossed
+
+        Returns:
+            True if successful, False otherwise
+        """
+        config = self._get_config()
+        if not config or not config.get("loss_alerts_enabled"):
+            return False
+
+        emoji = "🎉" if threshold_type == "PROFIT" else "📉"
+        sign = "+" if total_pnl >= 0 else ""
+
+        message = f"""{emoji} <b>PORTFOLIO {threshold_type} THRESHOLD HIT</b>
+
+Total P&L: {sign}₹{total_pnl:,.2f} ({sign}{total_pnl_pct:.2f}%)
+Threshold: {threshold_value:.2f}%
+
+Time: {datetime.now().strftime('%H:%M:%S')}"""
+
+        return self._send_alert(f"PORTFOLIO_{threshold_type}_THRESHOLD", message)
+
     def get_alert_history(self, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get recent alert history

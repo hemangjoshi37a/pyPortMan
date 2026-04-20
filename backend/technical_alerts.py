@@ -9,7 +9,7 @@ from typing import Dict, Any, List, Optional
 from sqlalchemy.orm import Session
 import numpy as np
 
-from models import Account, PriceAlert, AlertHistory
+from models import Account, PriceAlert, AlertHistory, TechnicalAlertRule
 
 # Configure logging
 logging.basicConfig(
@@ -343,3 +343,284 @@ class TechnicalAlertsManager:
             "alerts": alerts,
             "timestamp": datetime.utcnow().isoformat()
         }
+
+    def check_all_active_technical_alerts(self) -> List[Dict[str, Any]]:
+        """
+        Check all active technical alert rules and send notifications
+
+        Returns:
+            List of triggered alerts
+        """
+        try:
+            # Get all active technical alert rules
+            rules = self.db.query(TechnicalAlertRule).filter(
+                TechnicalAlertRule.enabled == True
+            ).all()
+
+            if not rules:
+                return []
+
+            triggered_alerts = []
+
+            for rule in rules:
+                # Get stocks to check (specific stock or all holdings)
+                if rule.stock:
+                    stocks_to_check = [(rule.stock, rule.exchange)]
+                else:
+                    # Get all holdings for this account or all accounts
+                    from models import Holding
+                    if rule.account_id:
+                        holdings = self.db.query(Holding).filter(
+                            Holding.account_id == rule.account_id
+                        ).all()
+                    else:
+                        holdings = self.db.query(Holding).join(Account).filter(
+                            Account.is_active == True
+                        ).all()
+                    stocks_to_check = [(h.stock, h.exchange) for h in holdings]
+
+                for stock, exchange in stocks_to_check:
+                    # Get price history for this stock
+                    # In production, this would fetch from broker API or database
+                    # For now, we'll use a placeholder
+                    prices = self._get_price_history(stock, exchange)
+                    volumes = self._get_volume_history(stock, exchange)
+
+                    if not prices or len(prices) < 30:
+                        continue
+
+                    # Check technical indicators based on rule settings
+                    results = {}
+
+                    if rule.rsi_enabled:
+                        results["rsi"] = self.check_rsi_alert(
+                            prices,
+                            rule.rsi_overbought,
+                            rule.rsi_oversold
+                        )
+
+                    if rule.macd_enabled:
+                        results["macd"] = self.check_macd_alert(prices)
+
+                    if rule.ma_crossover_enabled:
+                        results["ma_crossover"] = self.check_ma_crossover_alert(
+                            prices,
+                            rule.ma_fast_period,
+                            rule.ma_slow_period
+                        )
+
+                    if rule.bb_enabled:
+                        results["bollinger_bands"] = self.check_bollinger_band_alert(
+                            prices,
+                            rule.bb_period,
+                            rule.bb_std_dev
+                        )
+
+                    if rule.volume_enabled and volumes:
+                        results["volume"] = self.check_volume_alert(
+                            volumes,
+                            rule.volume_avg_period,
+                            rule.volume_multiplier
+                        )
+
+                    # Check if any alerts were triggered
+                    for indicator, result in results.items():
+                        if isinstance(result, dict) and result.get("signal") in ["buy", "sell", "strong_buy", "strong_sell"]:
+                            triggered_alerts.append({
+                                "rule_id": rule.id,
+                                "stock": stock,
+                                "exchange": exchange,
+                                "indicator": indicator,
+                                "signal": result["signal"],
+                                "details": result
+                            })
+
+                            # Send notification
+                            self._send_technical_alert_notification(
+                                rule, stock, indicator, result
+                            )
+
+                            # Update rule stats
+                            rule.last_triggered_at = datetime.utcnow()
+                            rule.trigger_count += 1
+
+                # Update last checked time
+                rule.last_checked_at = datetime.utcnow()
+
+            self.db.commit()
+            return triggered_alerts
+
+        except Exception as e:
+            logger.error(f"Error checking technical alerts: {e}")
+            self.db.rollback()
+            return []
+
+    def _get_price_history(self, stock: str, exchange: str, days: int = 30) -> List[float]:
+        """
+        Get price history for a stock
+        In production, this would fetch from broker API or database
+        """
+        # Placeholder - in production, fetch from KiteConnect or database
+        # For now, return empty list
+        return []
+
+    def _get_volume_history(self, stock: str, exchange: str, days: int = 30) -> List[float]:
+        """
+        Get volume history for a stock
+        In production, this would fetch from broker API or database
+        """
+        # Placeholder - in production, fetch from KiteConnect or database
+        # For now, return empty list
+        return []
+
+    def _send_technical_alert_notification(
+        self,
+        rule: TechnicalAlertRule,
+        stock: str,
+        indicator: str,
+        result: Dict[str, Any]
+    ):
+        """Send notification for technical alert"""
+        try:
+            # Get notification channels
+            channels = rule.notification_channels.split(",") if rule.notification_channels else ["telegram"]
+
+            # Format message
+            signal = result.get("signal", "hold")
+            emoji = "🟢" if "buy" in signal else "🔴" if "sell" in signal else "⚪"
+
+            message = f"""{emoji} <b>TECHNICAL ALERT - {stock}</b>
+
+Indicator: {indicator.upper()}
+Signal: {signal.upper()}
+Current Price: ₹{result.get('current_price', 0):.2f}
+
+Time: {datetime.now().strftime('%H:%M:%S')}"""
+
+            # Send to each channel
+            if "telegram" in channels:
+                from telegram_alerts import TelegramAlerts
+                telegram = TelegramAlerts(self.db)
+                telegram._send_alert(f"TECHNICAL_{indicator.upper()}", message)
+
+            # Add other channels (email, SMS, webhook) as needed
+
+            # Log to alert history
+            alert = AlertHistory(
+                alert_type=f"TECHNICAL_{indicator.upper()}",
+                message=message,
+                sent_at=datetime.utcnow(),
+                success=True
+            )
+            self.db.add(alert)
+
+        except Exception as e:
+            logger.error(f"Error sending technical alert notification: {e}")
+
+    def create_technical_alert_rule(self, rule_data: Dict[str, Any]) -> TechnicalAlertRule:
+        """
+        Create a new technical alert rule
+
+        Args:
+            rule_data: Dictionary with rule parameters
+
+        Returns:
+            Created TechnicalAlertRule
+        """
+        rule = TechnicalAlertRule(
+            account_id=rule_data.get("account_id"),
+            stock=rule_data.get("stock"),
+            exchange=rule_data.get("exchange", "NSE"),
+            enabled=rule_data.get("enabled", True),
+            rsi_enabled=rule_data.get("rsi_enabled", False),
+            rsi_overbought=rule_data.get("rsi_overbought", 70.0),
+            rsi_oversold=rule_data.get("rsi_oversold", 30.0),
+            rsi_period=rule_data.get("rsi_period", 14),
+            macd_enabled=rule_data.get("macd_enabled", False),
+            macd_fast_period=rule_data.get("macd_fast_period", 12),
+            macd_slow_period=rule_data.get("macd_slow_period", 26),
+            macd_signal_period=rule_data.get("macd_signal_period", 9),
+            ma_crossover_enabled=rule_data.get("ma_crossover_enabled", False),
+            ma_fast_period=rule_data.get("ma_fast_period", 10),
+            ma_slow_period=rule_data.get("ma_slow_period", 20),
+            bb_enabled=rule_data.get("bb_enabled", False),
+            bb_period=rule_data.get("bb_period", 20),
+            bb_std_dev=rule_data.get("bb_std_dev", 2.0),
+            volume_enabled=rule_data.get("volume_enabled", False),
+            volume_avg_period=rule_data.get("volume_avg_period", 20),
+            volume_multiplier=rule_data.get("volume_multiplier", 2.0),
+            notification_channels=rule_data.get("notification_channels", "telegram")
+        )
+
+        self.db.add(rule)
+        self.db.commit()
+        self.db.refresh(rule)
+
+        return rule
+
+    def get_technical_alert_rules(self, account_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get all technical alert rules
+
+        Args:
+            account_id: Filter by account ID (optional)
+
+        Returns:
+            List of technical alert rules
+        """
+        query = self.db.query(TechnicalAlertRule)
+
+        if account_id:
+            query = query.filter(TechnicalAlertRule.account_id == account_id)
+
+        rules = query.all()
+
+        return [
+            {
+                "id": rule.id,
+                "account_id": rule.account_id,
+                "stock": rule.stock,
+                "exchange": rule.exchange,
+                "enabled": rule.enabled,
+                "rsi_enabled": rule.rsi_enabled,
+                "rsi_overbought": rule.rsi_overbought,
+                "rsi_oversold": rule.rsi_oversold,
+                "rsi_period": rule.rsi_period,
+                "macd_enabled": rule.macd_enabled,
+                "ma_crossover_enabled": rule.ma_crossover_enabled,
+                "bb_enabled": rule.bb_enabled,
+                "volume_enabled": rule.volume_enabled,
+                "notification_channels": rule.notification_channels,
+                "last_checked_at": rule.last_checked_at.isoformat() if rule.last_checked_at else None,
+                "last_triggered_at": rule.last_triggered_at.isoformat() if rule.last_triggered_at else None,
+                "trigger_count": rule.trigger_count,
+                "created_at": rule.created_at.isoformat()
+            }
+            for rule in rules
+        ]
+
+    def delete_technical_alert_rule(self, rule_id: int) -> bool:
+        """
+        Delete a technical alert rule
+
+        Args:
+            rule_id: Rule ID to delete
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            rule = self.db.query(TechnicalAlertRule).filter(
+                TechnicalAlertRule.id == rule_id
+            ).first()
+
+            if rule:
+                self.db.delete(rule)
+                self.db.commit()
+                return True
+
+            return False
+        except Exception as e:
+            logger.error(f"Error deleting technical alert rule: {e}")
+            self.db.rollback()
+            return False
