@@ -1,0 +1,35 @@
+# Additional Dependencies for New Features
+
+# Core dependencies
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+
+# Charting
+matplotlib>=3.7.0
+
+# Excel export
+openpyxl>=3.1.0
+
+# Scientific calculations
+scipy>=1.11.0
+
+# Jupyter notebook (optional)
+jupyter>=1.0.0
+ipywidgets>=8.1.0
+qgrid>=1.3.0
+
+# Date handling
+python-dateutil>=2.8.0
+
+# Progress bars
+tqdm>=4.66.0
+
+# Telegram (optional)
+telepot>=12.7
+
+# NSE data (optional)
+nsepython>=2.5
+
+# Rich output (optional)
+rich>=13.7.0
