@@ -51,6 +51,20 @@ from charts import ChartsManager
 from technical_alerts import TechnicalAlertsManager
 from notifications import NotificationsManager
 from rebalancing import RebalancingManager
+from trailing_stop_loss import TrailingStopLossManager
+from order_templates import OrderTemplateManager
+from order_scheduling import OrderSchedulingManager
+from partial_exit import PartialExitStrategyManager
+from order_book_depth import OrderBookDepthManager
+from sector_pnl import SectorPnLManager
+from trading_statistics import TradingStatisticsManager
+from drawdown_analysis import DrawdownAnalysisManager
+from correlation_manager import CorrelationManager
+from tax_reports import TaxReportManager
+from discord_alerts import DiscordAlertsManager
+from email_alerts import EmailAlertsManager
+from volume_spike_alerts import VolumeSpikeAlertsManager
+from news_integration import NewsIntegrationManager
 
 # Load environment variables
 from dotenv import load_dotenv
@@ -2142,6 +2156,333 @@ def simulate_rebalance(account_id: int, request: SimulateRebalanceRequest, db: S
         request.target_allocations,
         request.transaction_cost_pct
     )
+
+# ==================== TRAILING STOP-LOSS MODELS ====================
+
+class TrailingStopLossCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange (NSE/BSE)")
+    qty: int = Field(..., description="Quantity")
+    initial_stop_loss: float = Field(..., description="Initial stop-loss price")
+    trail_amount: float = Field(..., description="Trail amount (points or percentage)")
+    trail_type: str = Field(default="POINTS", description="POINTS or PERCENTAGE")
+    position_type: str = Field(default="LONG", description="LONG or SHORT")
+
+class TrailingStopLossUpdate(BaseModel):
+    trail_amount: Optional[float] = None
+    trail_type: Optional[str] = None
+
+class TrailingStopLossResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    qty: int
+    initial_stop_loss: float
+    current_stop_loss: float
+    trail_amount: float
+    trail_type: str
+    position_type: str
+    status: str
+    highest_price: float
+    lowest_price: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== ORDER TEMPLATE MODELS ====================
+
+class OrderTemplateCreate(BaseModel):
+    name: str = Field(..., description="Template name")
+    description: Optional[str] = Field(None, description="Template description")
+    stock: Optional[str] = Field(None, description="Stock symbol (optional)")
+    exchange: str = Field(default="NSE", description="Exchange")
+    transaction_type: str = Field(..., description="BUY or SELL")
+    order_type: str = Field(default="MARKET", description="MARKET, LIMIT, SL, SL-M")
+    product: str = Field(default="CNC", description="CNC, MIS, NRML")
+    variety: str = Field(default="regular", description="regular, amo, bo, co")
+    default_quantity: int = Field(default=1, description="Default quantity")
+    default_price: Optional[float] = Field(None, description="Default price for LIMIT orders")
+    default_stoploss: Optional[float] = Field(None, description="Default stop-loss")
+    default_target: Optional[float] = Field(None, description="Default target for BO orders")
+    validity: str = Field(default="DAY", description="Order validity")
+
+class OrderTemplateResponse(BaseModel):
+    id: int
+    name: str
+    description: Optional[str]
+    stock: Optional[str]
+    exchange: str
+    transaction_type: str
+    order_type: str
+    product: str
+    variety: str
+    default_quantity: int
+    default_price: Optional[float]
+    default_stoploss: Optional[float]
+    default_target: Optional[float]
+    validity: str
+    is_active: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== SCHEDULED ORDER MODELS ====================
+
+class ScheduledOrderCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange")
+    transaction_type: str = Field(..., description="BUY or SELL")
+    quantity: int = Field(..., description="Quantity")
+    order_type: str = Field(default="MARKET", description="MARKET, LIMIT, SL, SL-M")
+    product: str = Field(default="CNC", description="CNC, MIS, NRML")
+    price: Optional[float] = Field(None, description="Price for LIMIT orders")
+    validity: str = Field(default="DAY", description="Order validity")
+    scheduled_time: Optional[datetime] = Field(None, description="Scheduled time")
+    time_type: str = Field(default="SPECIFIC", description="SPECIFIC, PRE_MARKET, POST_MARKET")
+
+class ScheduledOrderResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    transaction_type: str
+    quantity: int
+    order_type: str
+    product: str
+    price: Optional[float]
+    validity: str
+    scheduled_time: datetime
+    time_type: str
+    status: str
+    placed_order_id: Optional[str]
+    error_message: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== PARTIAL EXIT MODELS ====================
+
+class PartialExitPointCreate(BaseModel):
+    sequence: int = Field(..., description="Exit sequence (1, 2, 3...)")
+    quantity: int = Field(..., description="Quantity to exit")
+    quantity_pct: Optional[float] = Field(None, description="Percentage of total quantity")
+    target_price: float = Field(..., description="Target price")
+    stop_loss: Optional[float] = Field(None, description="Stop-loss for remaining position")
+
+class PartialExitStrategyCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange")
+    position_type: str = Field(default="LONG", description="LONG or SHORT")
+    total_quantity: int = Field(..., description="Total quantity")
+    exit_points: List[PartialExitPointCreate] = Field(..., description="List of exit points")
+
+class PartialExitStrategyResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    position_type: str
+    total_quantity: int
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== SECTOR P&L MODELS ====================
+
+class SectorPnLResponse(BaseModel):
+    sector: str
+    stock: str
+    investment_value: float
+    current_value: float
+    pnl: float
+    pnl_percent: float
+    weight: float
+    recorded_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== TRADING STATISTICS MODELS ====================
+
+class TradingStatisticsResponse(BaseModel):
+    id: int
+    account_id: int
+    period: str
+    period_start: datetime
+    period_end: datetime
+    total_trades: int
+    winning_trades: int
+    losing_trades: int
+    win_rate: float
+    risk_reward_ratio: float
+    total_pnl: float
+    max_drawdown_pct: float
+    sharpe_ratio: Optional[float]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== DRAWDOWN MODELS ====================
+
+class DrawdownRecordResponse(BaseModel):
+    id: int
+    account_id: int
+    peak_value: float
+    trough_value: float
+    drawdown_amount: float
+    drawdown_pct: float
+    peak_date: datetime
+    trough_date: datetime
+    duration_days: int
+    is_current: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== CORRELATION MODELS ====================
+
+class CorrelationDataResponse(BaseModel):
+    id: int
+    account_id: int
+    stock1: str
+    stock2: str
+    correlation: float
+    period_days: int
+    calculated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== TAX REPORT MODELS ====================
+
+class TaxReportCreate(BaseModel):
+    report_type: str = Field(default="MONTHLY", description="MONTHLY, QUARTERLY, YEARLY")
+    period_start: Optional[datetime] = Field(None, description="Start date")
+    period_end: Optional[datetime] = Field(None, description="End date")
+
+class TaxReportResponse(BaseModel):
+    id: int
+    account_id: int
+    report_type: str
+    period_start: datetime
+    period_end: datetime
+    generated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== DISCORD CONFIG MODELS ====================
+
+class DiscordConfigCreate(BaseModel):
+    bot_token: Optional[str] = Field(None, description="Discord bot token")
+    channel_id: Optional[str] = Field(None, description="Discord channel ID")
+    webhook_url: Optional[str] = Field(None, description="Discord webhook URL")
+    gtt_alerts_enabled: bool = Field(default=True)
+    loss_alerts_enabled: bool = Field(default=True)
+    daily_summary_enabled: bool = Field(default=True)
+    order_alerts_enabled: bool = Field(default=True)
+    loss_threshold_pct: float = Field(default=5.0)
+
+class DiscordConfigResponse(BaseModel):
+    id: int
+    channel_id: Optional[str]
+    webhook_url: Optional[str]
+    gtt_alerts_enabled: bool
+    loss_alerts_enabled: bool
+    daily_summary_enabled: bool
+    order_alerts_enabled: bool
+    loss_threshold_pct: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== EMAIL CONFIG MODELS ====================
+
+class EmailConfigCreate(BaseModel):
+    smtp_server: str = Field(default="smtp.gmail.com", description="SMTP server")
+    smtp_port: int = Field(default=587, description="SMTP port")
+    smtp_username: str = Field(..., description="SMTP username")
+    smtp_password: str = Field(..., description="SMTP password")
+    from_email: str = Field(..., description="From email address")
+    to_emails: str = Field(..., description="Comma-separated recipient emails")
+    gtt_alerts_enabled: bool = Field(default=True)
+    loss_alerts_enabled: bool = Field(default=True)
+    margin_call_alerts_enabled: bool = Field(default=True)
+    daily_summary_enabled: bool = Field(default=True)
+    loss_threshold_pct: float = Field(default=5.0)
+
+class EmailConfigResponse(BaseModel):
+    id: int
+    smtp_server: str
+    smtp_port: int
+    smtp_username: str
+    from_email: str
+    to_emails: str
+    gtt_alerts_enabled: bool
+    loss_alerts_enabled: bool
+    margin_call_alerts_enabled: bool
+    daily_summary_enabled: bool
+    loss_threshold_pct: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== VOLUME SPIKE ALERT MODELS ====================
+
+class VolumeSpikeAlertCreate(BaseModel):
+    stock: str = Field(..., description="Trading symbol")
+    exchange: str = Field(default="NSE", description="Exchange")
+    avg_volume_period: int = Field(default=20, description="Period for average volume (days)")
+    volume_multiplier: float = Field(default=2.0, description="Volume multiplier for spike")
+    min_volume: int = Field(default=10000, description="Minimum volume to consider")
+    repeat: bool = Field(default=False, description="Repeat alert")
+    repeat_interval_hours: int = Field(default=24, description="Repeat interval in hours")
+
+class VolumeSpikeAlertResponse(BaseModel):
+    id: int
+    account_id: int
+    stock: str
+    exchange: str
+    avg_volume_period: int
+    volume_multiplier: float
+    min_volume: int
+    status: str
+    triggered_at: Optional[datetime]
+    triggered_volume: Optional[int]
+    avg_volume: Optional[int]
+    repeat: bool
+    repeat_interval_hours: int
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+# ==================== NEWS MODELS ====================
+
+class NewsItemResponse(BaseModel):
+    id: int
+    stock: str
+    title: str
+    summary: Optional[str]
+    url: Optional[str]
+    source: Optional[str]
+    published_at: Optional[datetime]
+    sentiment: Optional[str]
+    relevance_score: float
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
 
 # ==================== STOCK DATA ====================
 
